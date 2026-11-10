@@ -4,7 +4,8 @@ Reads the auction data Auctionator saves on disk, archives a snapshot every
 time you scan, reports on the market, and feeds a trading-terminal web UI you
 and your friends can pool scans into.
 
-- **Terminal UI**: https://claude.ai/artifact/8UTonQ7uWrxwEEvoTf9g4x
+- **Terminal UI**: https://kwargs.click/wow-ah-terminal/ (also as a
+  [Claude artifact](https://claude.ai/artifact/8UTonQ7uWrxwEEvoTf9g4x))
 - **Companion addon**: `addon/` (copy to `Interface\AddOns\AHEcon\`)
 
 ## The loop
@@ -126,9 +127,13 @@ read-and-append credential for whoever has it.
 
 | where | pool | key |
 | --- | --- | --- |
-| the artifact link above | the page's own store | none needed |
+| https://kwargs.click/wow-ah-terminal/ | Supabase | pasted once, per browser |
 | `python ah.py ui` | Supabase | read from `web/pool.js` |
-| a public copy, e.g. GitHub Pages | Supabase | pasted once, per browser |
+| the Claude artifact | the page's own store | none needed |
+
+The Pages site is built by `.github/workflows/pages.yml`, which copies the
+page and the **keyless** `pool.js` stub, publishes no scan data, and greps
+the assembled site for a key or project URL and fails rather than ship one.
 
 The artifact is the no-install view: it opens on a baseline scan, reads files
 you drop on it, and pools through its own store for people who can open the
@@ -138,7 +143,7 @@ origin -- so it does not try.
 `python ah.py ui` serves the same file from your own machine, where it reads
 the Supabase pool directly.
 
-A copy served from a public URL **ships no key**. It asks for the invite once
+The public site **ships no key**. It asks for the invite once
 and keeps it in that browser's local storage, so the pool stays invite-gated
 even though the page is public. Pasting the whole `python ah.py pool-join …`
 line works, and so does a link ending `#invite=<token>` -- a fragment is

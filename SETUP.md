@@ -67,9 +67,11 @@ Scheduler or cron can run it every few minutes instead.
 python ah.py ui
 ```
 
-Opens the terminal in your browser with the whole pool behind it. If you were
-sent a web link to the terminal instead, open that and paste the same invite
-line into the box on the Load screen -- it is kept in your browser only. Number keys
+Opens the terminal in your browser with the whole pool behind it.
+
+Or skip that and open **https://kwargs.click/wow-ah-terminal/**, then paste
+the same invite line into the box on screen `6`. It is kept in your browser
+only -- the page itself carries no key, which is why it has to ask. Number keys
 `1`–`6` switch screens: Market, Movers, Arbitrage, Vendor Flips, Depth, Load.
 `/` searches, `j`/`k` move, `W` watchlists an item.
 

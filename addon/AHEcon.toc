@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: AH Econ Export
+## Version: 2.0
+## Notes: Exports item details and auction order-book depth for desktop analysis.
+## SavedVariables: AHECON_NAMES, AHECON_ITEMS, AHECON_DEPTH, AHECON_META, AHECON_DEBUG
+
+ItemIDs.lua
+AHEcon.lua

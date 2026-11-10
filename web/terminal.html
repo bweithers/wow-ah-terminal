@@ -1,0 +1,1259 @@
+<title>Azeroth Auction Terminal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: fixed status rail, function-key column, data grid, detail dock.
+   Single committed dark look -- a trading terminal, amber on black. */
+:root {
+  --bg: #06080a;
+  --panel: #0c1014;
+  --panel2: #11171d;
+  --line: #1d262f;
+  --amber: #f0a825;
+  --amber-dim: #8a641a;
+  --cyan: #3bb0c9;
+  --text: #c2cdd8;
+  --mute: #6b7a88;
+  --up: #35c06f;
+  --down: #e8474d;
+  --sel: #16304a;
+  --warn: #d98324;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding-left: max(0px, env(safe-area-inset-left, 0px));
+  padding-right: max(0px, env(safe-area-inset-right, 0px));
+}
+.gutter { padding-left: max(10px, env(safe-area-inset-left, 0px));
+          padding-right: max(10px, env(safe-area-inset-right, 0px)); }
+
+/* ---- status rail ---- */
+#rail {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 18px;
+  padding-block: 6px;
+  flex: none;
+}
+#rail .brand {
+  color: var(--amber); font-weight: 600; letter-spacing: .14em;
+  text-transform: uppercase; white-space: nowrap;
+}
+#rail .stat { white-space: nowrap; color: var(--text); }
+#rail .stat b { color: var(--mute); font-weight: 400; margin-right: 5px;
+  text-transform: uppercase; letter-spacing: .07em; font-size: 10px; }
+#rail .live { color: var(--up); }
+#rail .stale { color: var(--warn); }
+
+/* ---- function keys ---- */
+#keys {
+  display: flex; flex-wrap: wrap; gap: 1px;
+  background: var(--line); border-bottom: 1px solid var(--line); flex: none;
+}
+#keys button {
+  flex: 1 1 auto; min-width: 86px;
+  background: var(--panel2); color: var(--mute);
+  border: 0; border-top: 2px solid transparent;
+  font: 500 11px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 7px 10px; cursor: pointer;
+}
+#keys button:hover { color: var(--text); background: #151d25; }
+#keys button[aria-selected="true"] {
+  color: var(--amber); background: var(--bg); border-top-color: var(--amber);
+}
+#keys button:focus-visible { outline: 1px solid var(--cyan); outline-offset: -2px; }
+#keys .fk { color: var(--amber-dim); margin-right: 6px; }
+
+/* ---- query bar ---- */
+#bar {
+  display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid var(--line); background: var(--bg);
+  padding-block: 5px; flex: none; flex-wrap: wrap;
+}
+#bar label { color: var(--mute); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; }
+#q {
+  flex: 1 1 180px; min-width: 0;
+  background: var(--panel2); color: var(--amber);
+  border: 1px solid var(--line); padding: 4px 7px;
+  font: 400 12px var(--mono);
+}
+#q:focus { outline: none; border-color: var(--cyan); }
+#bar .count { color: var(--mute); white-space: nowrap; }
+#bar .chip {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--mute);
+  padding: 3px 7px; cursor: pointer; font: 400 11px var(--mono);
+}
+#bar .chip[aria-pressed="true"] { color: var(--bg); background: var(--amber);
+  border-color: var(--amber); }
+
+/* ---- main split ---- */
+#main { display: flex; min-height: 0; flex: 1 1 auto; }
+#grid { flex: 1 1 auto; min-width: 0; overflow: auto; }
+#dock {
+  flex: 0 0 300px; min-width: 0; border-left: 1px solid var(--line);
+  background: var(--panel); overflow: auto; padding: 10px;
+}
+
+/* ---- tables ---- */
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: #0f1620; color: var(--cyan);
+  font: 500 10px var(--mono); letter-spacing: .09em; text-transform: uppercase;
+  text-align: right; padding: 6px 8px; white-space: nowrap;
+  border-bottom: 1px solid var(--line); cursor: pointer; user-select: none;
+}
+thead th:first-child, tbody td:first-child { text-align: left; }
+thead th[aria-sort] { color: var(--amber); }
+thead th .ar { opacity: .7; }
+tbody td {
+  padding: 3px 8px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid #0f1419;
+}
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: #0f1620; }
+tbody tr[aria-selected="true"] { background: var(--sel); }
+tbody tr[aria-selected="true"] td { color: #eaf2f8; }
+td.name { max-width: 34ch; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text); }
+td.num { color: var(--amber); }
+td.pos { color: var(--up); } td.neg { color: var(--down); }
+td.muted { color: var(--mute); }
+.q0 { color: var(--mute); } .q1 { color: #fff; } .q2 { color: #35c06f; }
+.q3 { color: #4a93e0; } .q4 { color: #b86ede; } .q5 { color: #f0a825; }
+
+/* ---- dock panels ---- */
+.dk-h { color: var(--cyan); font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; border-bottom: 1px solid var(--line);
+  padding-bottom: 4px; margin: 14px 0 7px; }
+.dk-h:first-child { margin-top: 0; }
+.kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.kv span { color: var(--mute); }
+.kv b { font-weight: 500; color: var(--amber); }
+#itemname { color: #eaf2f8; font-size: 14px; font-weight: 600;
+  line-height: 1.25; margin-bottom: 2px; word-break: break-word; }
+#itemsub { color: var(--mute); font-size: 11px; }
+.ladder { width: 100%; }
+.ladder td { padding: 2px 0; border: 0; }
+.ladder .bar { background: var(--amber-dim); height: 9px; display: block; }
+.empty { color: var(--mute); padding: 26px 10px; text-align: center;
+  line-height: 1.6; }
+.hint { color: var(--mute); font-size: 11px; line-height: 1.5; }
+.hint kbd { background: var(--panel2); border: 1px solid var(--line);
+  color: var(--text); padding: 0 4px; }
+
+/* ---- load screen ---- */
+#drop {
+  border: 1px dashed var(--line); background: var(--panel);
+  padding: 26px 16px; text-align: center; margin: 14px 0;
+}
+#drop.over { border-color: var(--amber); background: #141a10; }
+#drop h3 { color: var(--amber); margin: 0 0 6px; font-size: 13px;
+  letter-spacing: .06em; text-transform: uppercase; }
+#drop p { margin: 4px 0; color: var(--mute); font-size: 11px; }
+#drop input { display: none; }
+#drop button {
+  background: var(--amber); color: #15100a; border: 0; margin-top: 10px;
+  font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 7px 14px; cursor: pointer;
+}
+.sv { color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+  padding: 8px 10px; margin: 8px 0; font-size: 11px; line-height: 1.6; }
+.sv code { color: var(--amber); }
+#log { white-space: pre-wrap; color: var(--mute); font-size: 11px;
+  line-height: 1.5; max-height: 190px; overflow: auto; }
+.pill { display: inline-block; padding: 1px 6px; border: 1px solid var(--line);
+  color: var(--mute); font-size: 10px; margin-left: 6px; }
+.pill.ok { color: var(--up); border-color: #1d4030; }
+.pill.no { color: var(--warn); border-color: #4a3416; }
+
+@media (max-width: 860px) {
+  #main { flex-direction: column; }
+  #dock { flex: none; border-left: 0; border-top: 1px solid var(--line);
+    max-height: 46%; }
+  #rail { gap: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div id="shell">
+  <div id="rail" class="gutter">
+    <span class="brand">Azeroth Auction Terminal</span>
+    <span class="stat"><b>realm</b><span id="s-realm">--</span></span>
+    <span class="stat"><b>scan</b><span id="s-scan">--</span></span>
+    <span class="stat"><b>markets</b><span id="s-n">--</span></span>
+    <span class="stat"><b>listed</b><span id="s-val">--</span></span>
+    <span class="stat"><b>median</b><span id="s-med">--</span></span>
+    <span class="stat"><b>pool</b><span id="s-pool">local</span></span>
+  </div>
+
+  <div id="keys" role="tablist" aria-label="Screens"></div>
+
+  <div id="bar" class="gutter">
+    <label for="q">Search</label>
+    <input id="q" placeholder="item name or id" autocomplete="off" spellcheck="false">
+    <button class="chip" id="chip-stock" aria-pressed="false">in stock</button>
+    <button class="chip" id="chip-named" aria-pressed="true">named only</button>
+    <button class="chip" id="chip-watch" aria-pressed="false">watchlist</button>
+    <span class="count" id="s-rows"></span>
+  </div>
+
+  <div id="main">
+    <div id="grid"><div class="empty" id="boot">Loading scan data…</div></div>
+    <aside id="dock">
+      <div class="dk-h">Instrument</div>
+      <div id="itemname">No selection</div>
+      <div id="itemsub">Pick a row to see price history, depth and vendor data.</div>
+      <div id="dockbody"></div>
+    </aside>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ *
+ * Formatting
+ * ------------------------------------------------------------------ */
+const DAY0 = Date.UTC(2020, 0, 1);
+const dayToDate = d => new Date(DAY0 + d * 86400000);
+const fmtDay = d => dayToDate(d).toISOString().slice(5, 10);
+
+function gold(c) {
+  if (c == null || !isFinite(c)) return "--";
+  const neg = c < 0 ? "-" : "";
+  c = Math.round(Math.abs(c));
+  const g = Math.floor(c / 10000), s = Math.floor((c % 10000) / 100), k = c % 100;
+  if (g) return `${neg}${g.toLocaleString()}g${String(s).padStart(2, "0")}`;
+  if (s) return `${neg}${s}s${String(k).padStart(2, "0")}`;
+  return `${neg}${k}c`;
+}
+const pct = v => v == null || !isFinite(v) ? "--"
+  : (v > 0 ? "+" : "") + v.toFixed(0) + "%";
+const num = v => v == null ? "--" : Math.round(v).toLocaleString();
+
+/* ------------------------------------------------------------------ *
+ * SavedVariables reader: a restricted Lua subset, no evaluation.
+ * ------------------------------------------------------------------ */
+const LUA_RE = /(\s+)|(--\[(=*)\[[\s\S]*?\]\3\])|(--[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?))|([A-Za-z_][A-Za-z0-9_]*)|([{}\[\]=,;])/g;
+const LUA_ESC = { a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
+                  v: "\v", "\\": "\\", '"': '"', "'": "'", "\n": "\n" };
+
+function luaUnescape(s) {
+  return s.replace(/\\(z\s*|x[0-9a-fA-F]{2}|[0-9]{1,3}|[\s\S])/g, (_, b) => {
+    if (b[0] === "z") return "";
+    if (b[0] === "x") return String.fromCharCode(parseInt(b.slice(1), 16));
+    if (/^[0-9]/.test(b)) return String.fromCharCode(parseInt(b, 10));
+    return LUA_ESC[b] !== undefined ? LUA_ESC[b] : b;
+  });
+}
+
+function luaTokens(src) {
+  const out = [];
+  LUA_RE.lastIndex = 0;
+  let m, pos = 0;
+  while (pos < src.length) {
+    LUA_RE.lastIndex = pos;
+    m = LUA_RE.exec(src);
+    if (!m || m.index !== pos) throw new Error("bad character at offset " + pos);
+    pos = LUA_RE.lastIndex;
+    if (m[1] !== undefined || m[2] !== undefined || m[4] !== undefined) continue;
+    if (m[5] !== undefined) { out.push(["str", luaUnescape(m[5].slice(1, -1))]); continue; }
+    if (m[6] !== undefined) {
+      const t = m[6];
+      out.push(["num", /^-?0[xX]/.test(t) ? parseInt(t, 16) : parseFloat(t)]);
+      continue;
+    }
+    if (m[7] !== undefined) {
+      const w = m[7].toLowerCase();
+      if (w === "true") out.push(["bool", true]);
+      else if (w === "false") out.push(["bool", false]);
+      else if (w === "nil") out.push(["nil", null]);
+      else out.push(["name", m[7]]);
+      continue;
+    }
+    out.push([m[8], m[8]]);
+  }
+  out.push(["eof", null]);
+  return out;
+}
+
+function luaParse(src) {
+  const t = luaTokens(src);
+  let i = 0;
+  const peek = () => t[i], next = () => t[i++];
+  function expect(k) {
+    const tok = next();
+    if (tok[0] !== k) throw new Error(`expected ${k}, got ${tok[0]}`);
+    return tok;
+  }
+  function value() {
+    const [k, v] = next();
+    if (k === "str" || k === "num" || k === "bool" || k === "nil") return v;
+    if (k === "{") return table();
+    throw new Error("unexpected " + k);
+  }
+  function table() {
+    const o = Object.create(null);
+    let idx = 1;
+    for (;;) {
+      const k = peek()[0];
+      if (k === "}") { next(); return o; }
+      if (k === "," || k === ";") { next(); continue; }
+      if (k === "[") {
+        next();
+        const key = value();
+        expect("]"); expect("=");
+        o[key] = value();
+      } else if (k === "name" && t[i + 1][0] === "=") {
+        const key = next()[1];
+        expect("=");
+        o[key] = value();
+      } else {
+        o[idx++] = value();
+      }
+    }
+  }
+  const out = Object.create(null);
+  while (peek()[0] !== "eof") {
+    if (peek()[0] === "," || peek()[0] === ";") { next(); continue; }
+    const name = expect("name")[1];
+    expect("=");
+    out[name] = value();
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * CBOR (RFC 8949), the subset the price database uses
+ * ------------------------------------------------------------------ */
+function cborDecode(bytes) {
+  let p = 0;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const BREAK = Symbol("break");
+  function len(ai) {
+    if (ai < 24) return ai;
+    if (ai === 24) return bytes[p++];
+    if (ai === 25) { const v = dv.getUint16(p); p += 2; return v; }
+    if (ai === 26) { const v = dv.getUint32(p); p += 4; return v; }
+    if (ai === 27) { const v = Number(dv.getBigUint64(p)); p += 8; return v; }
+    if (ai === 31) return null;
+    throw new Error("reserved length " + ai);
+  }
+  function val() {
+    const head = bytes[p++], major = head >> 5, ai = head & 31;
+    if (major === 0) return len(ai);
+    if (major === 1) return -1 - len(ai);
+    if (major === 2 || major === 3) {
+      const n = len(ai);
+      if (n === null) {
+        let s = "";
+        for (;;) { const v = val(); if (v === BREAK) break; s += v; }
+        return s;
+      }
+      let s = "";
+      for (let k = 0; k < n; k++) s += String.fromCharCode(bytes[p + k]);
+      p += n;
+      return s;
+    }
+    if (major === 4) {
+      const n = len(ai), a = [];
+      if (n === null) { for (;;) { const v = val(); if (v === BREAK) break; a.push(v); } }
+      else for (let k = 0; k < n; k++) a.push(val());
+      return a;
+    }
+    if (major === 5) {
+      const n = len(ai), o = Object.create(null);
+      if (n === null) {
+        for (;;) { const k = val(); if (k === BREAK) break; o[k] = val(); }
+      } else for (let k = 0; k < n; k++) { const key = val(); o[key] = val(); }
+      return o;
+    }
+    if (major === 6) { len(ai); return val(); }
+    if (ai === 20) return false;
+    if (ai === 21) return true;
+    if (ai === 22 || ai === 23) return null;
+    if (ai === 25) { const v = dv.getFloat16 ? dv.getFloat16(p) : null; p += 2; return v; }
+    if (ai === 26) { const v = dv.getFloat32(p); p += 4; return v; }
+    if (ai === 27) { const v = dv.getFloat64(p); p += 8; return v; }
+    if (ai === 31) return BREAK;
+    if (ai === 24) return bytes[p++];
+    return ai;
+  }
+  const out = val();
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Auctionator.lua -> the same columnar shape the desktop tool emits
+ * ------------------------------------------------------------------ */
+function parseAuctionator(buf, uploader, fileTime) {
+  const g = luaParse(latin1(buf));
+  const pdb = g.AUCTIONATOR_PRICE_DATABASE;
+  if (!pdb) throw new Error("no AUCTIONATOR_PRICE_DATABASE in this file");
+
+  let realm = null, table_ = null;
+  for (const k of Object.keys(pdb)) {
+    if (k.startsWith("__")) continue;
+    const v = pdb[k];
+    let decoded = null;
+    if (typeof v === "string") {
+      const raw = new Uint8Array(v.length);
+      for (let i = 0; i < v.length; i++) raw[i] = v.charCodeAt(i) & 0xff;
+      decoded = cborDecode(raw);
+    } else if (typeof v === "object") decoded = v;
+    if (decoded && (!table_ || Object.keys(decoded).length > Object.keys(table_).length)) {
+      realm = k; table_ = decoded;
+    }
+  }
+  if (!table_) throw new Error("no realm price table found");
+
+  const vendor = g.AUCTIONATOR_VENDOR_PRICE_CACHE || {};
+  // Item names and vendor sell prices live in AHEcon.lua, a separate file.
+  // Use whatever has been loaded so far; a later AHEcon.lua back-fills.
+  const D = readAHEcon(g, S.details);
+  const names = D.names, sells = D.sells, stacks = D.stacks,
+        quals = D.quals, ilvls = D.ilvls;
+
+  const ids = Object.keys(table_).filter(k => /^\d+$/.test(k))
+    .map(Number).sort((a, b) => a - b);
+  const out = {
+    schema: 1, realm, uploader: uploader || "me",
+    scan: new Date(fileTime || Date.now()).toISOString(),
+    n: 0, id: [], nm: [], p: [], q: [], ms: [], s: [], st: [], ql: [], il: [],
+    vb: [], hist: {}, ld: null, posts: []
+  };
+  ids.forEach((id, idx) => {
+    const rec = table_[String(id)];
+    if (!rec || typeof rec !== "object") return;
+    const h = rec.h || {}, a = rec.a || {};
+    const days = Object.keys(h).map(Number).filter(n => !isNaN(n)).sort((x, y) => x - y);
+    const aDays = Object.keys(a).map(Number).filter(n => !isNaN(n)).sort((x, y) => x - y);
+    const price = days.length ? h[String(days[days.length - 1])]
+                              : (typeof rec.m === "number" ? rec.m : null);
+    if (price == null) return;
+    const i = out.id.length;
+    out.id.push(id);
+    out.nm.push(names[String(id)] || "");
+    out.p.push(price);
+    out.q.push(aDays.length ? a[String(aDays[aDays.length - 1])] : null);
+    out.ms.push(typeof rec.m === "number" ? rec.m : null);
+    out.s.push(sells[String(id)] ?? null);
+    out.st.push(stacks[String(id)] ?? null);
+    out.ql.push(quals[String(id)] ?? null);
+    out.il.push(ilvls[String(id)] ?? null);
+    out.vb.push(typeof vendor[String(id)] === "number" ? vendor[String(id)] : null);
+    for (const d of days) {
+      (out.hist[String(d)] = out.hist[String(d)] || []).push([i, h[String(d)]]);
+    }
+  });
+  out.n = out.id.length;
+
+  const ph = g.AUCTIONATOR_POSTING_HISTORY || {};
+  for (const k of Object.keys(ph)) {
+    if (k.startsWith("__")) continue;
+    const entries = ph[k];
+    if (entries && typeof entries === "object") {
+      for (const e of Object.values(entries)) {
+        if (e && typeof e.price === "number") {
+          out.posts.push([Number(k), e.price, e.quantity ?? null, e.time ?? null]);
+        }
+      }
+    }
+  }
+  return out;
+}
+/* Item details out of AHEcon.lua (or a merged store), newest winning. */
+function readAHEcon(g, into) {
+  const D = into || { names: {}, sells: {}, stacks: {}, quals: {}, ilvls: {} };
+  const items = g.AHECON_ITEMS || {};
+  for (const k of Object.keys(items)) {
+    const r = items[k];
+    if (r && typeof r === "object") {
+      if (r.n) D.names[k] = utf8(r.n);
+      if (typeof r.s === "number") D.sells[k] = r.s;
+      if (typeof r.st === "number") D.stacks[k] = r.st;
+      if (typeof r.q === "number") D.quals[k] = r.q;
+      if (typeof r.il === "number") D.ilvls[k] = r.il;
+    }
+  }
+  const flat = g.AHECON_NAMES || {};
+  for (const k of Object.keys(flat)) {
+    if (!D.names[k] && typeof flat[k] === "string") D.names[k] = utf8(flat[k]);
+  }
+  return D;
+}
+
+/* Fill a loaded scan's name and vendor columns from the detail store. */
+function applyDetails(pk) {
+  const D = S.details;
+  let filled = 0;
+  for (let i = 0; i < pk.n; i++) {
+    const k = String(pk.id[i]);
+    if (!pk.nm[i] && D.names[k]) { pk.nm[i] = D.names[k]; filled++; }
+    if (pk.s && pk.s[i] == null && D.sells[k] != null) pk.s[i] = D.sells[k];
+    if (pk.st && pk.st[i] == null && D.stacks[k] != null) pk.st[i] = D.stacks[k];
+    if (pk.ql && pk.ql[i] == null && D.quals[k] != null) pk.ql[i] = D.quals[k];
+    if (pk.il && pk.il[i] == null && D.ilvls[k] != null) pk.il[i] = D.ilvls[k];
+  }
+  return filled;
+}
+
+function utf8(s) {
+  if (typeof s !== "string") return s;
+  try {
+    const b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
+    return new TextDecoder("utf-8").decode(b);
+  } catch (e) { return s; }
+}
+
+/* ------------------------------------------------------------------ *
+ * State
+ * ------------------------------------------------------------------ */
+const S = {
+  scans: [],          // packed scans, newest first
+  // item names / vendor sell prices, merged from any AHEcon.lua loaded
+  details: { names: {}, sells: {}, stacks: {}, quals: {}, ilvls: {} },
+  cur: null,          // expanded current scan
+  prev: null,         // expanded comparison scan
+  items: [],
+  view: [],
+  screen: "market",
+  sel: null,
+  sort: { key: "value", dir: -1 },
+  q: "",
+  filters: { stock: false, named: true, watch: false },
+  watch: new Set(),
+  pool: "local",
+  db: null, user: null, canWrite: false,
+};
+
+try {
+  const w = localStorage.getItem("aat.watch");
+  if (w) JSON.parse(w).forEach(x => S.watch.add(Number(x)));
+} catch (e) { /* storage may be unavailable */ }
+function saveWatch() {
+  try { localStorage.setItem("aat.watch", JSON.stringify([...S.watch])); }
+  catch (e) { /* ignore */ }
+}
+
+function expand(pk) {
+  const items = [];
+  const histByIdx = {};
+  for (const d of Object.keys(pk.hist || {})) {
+    for (const [i, p] of pk.hist[d]) {
+      (histByIdx[i] = histByIdx[i] || []).push([Number(d), p]);
+    }
+  }
+  const postsBy = {};
+  for (const [id, price, qty, t] of pk.posts || []) {
+    (postsBy[id] = postsBy[id] || []).push({ price, qty, t });
+  }
+  for (let i = 0; i < pk.n; i++) {
+    const h = (histByIdx[i] || []).sort((a, b) => a[0] - b[0]);
+    const price = pk.p[i], qty = pk.q ? pk.q[i] : null;
+    const sell = pk.s ? pk.s[i] : null;
+    items.push({
+      id: pk.id[i],
+      name: pk.nm[i] || "",
+      price, qty,
+      value: qty ? price * qty : 0,
+      minSeen: pk.ms ? pk.ms[i] : null,
+      sell,
+      stack: pk.st ? pk.st[i] : null,
+      qual: pk.ql ? pk.ql[i] : null,
+      ilvl: pk.il ? pk.il[i] : null,
+      vbuy: pk.vb ? pk.vb[i] : null,
+      hist: h,
+      ladder: pk.ld && pk.ld[String(i)] ? pk.ld[String(i)] : null,
+      posts: postsBy[pk.id[i]] || null,
+      // derived
+      backProfit: sell && price < sell ? sell - price : 0,
+      flipMult: pk.vb && pk.vb[i] ? price / pk.vb[i] : 0,
+    });
+  }
+  return { pk, items, byId: new Map(items.map(it => [it.id, it])) };
+}
+
+/* ------------------------------------------------------------------ *
+ * Screens
+ * ------------------------------------------------------------------ */
+const money = (it, k) => gold(it[k]);
+const SCREENS = {
+  market: {
+    label: "Market", fk: "F1",
+    cols: [
+      { k: "name", h: "Instrument", f: it => nameCell(it) },
+      { k: "price", h: "Last", f: it => gold(it.price), cls: "num" },
+      { k: "qty", h: "Qty", f: it => num(it.qty) },
+      { k: "value", h: "Listed Value", f: it => gold(it.value), cls: "num" },
+      { k: "spark", h: "History", f: it => spark(it), sortable: false },
+      { k: "minSeen", h: "Min Seen", f: it => gold(it.minSeen), cls: "muted" },
+    ],
+    sort: "value",
+  },
+  movers: {
+    label: "Movers", fk: "F2",
+    cols: [
+      { k: "name", h: "Instrument", f: it => nameCell(it) },
+      { k: "wasPrice", h: "Prev", f: it => gold(it.wasPrice), cls: "muted" },
+      { k: "price", h: "Last", f: it => gold(it.price), cls: "num" },
+      { k: "chg", h: "Change", f: it => pct(it.chg), cls: it => it.chg >= 0 ? "pos" : "neg" },
+      { k: "qty", h: "Qty", f: it => num(it.qty) },
+      { k: "value", h: "Listed Value", f: it => gold(it.value), cls: "num" },
+    ],
+    sort: "absChg",
+    rows: () => S.items.filter(it => it.chg != null && Math.abs(it.chg) >= 1),
+    note: () => S.prev
+      ? `Comparing scan ${S.cur.pk.scan.slice(0, 16).replace("T", " ")} against ${S.prev.pk.scan.slice(0, 16).replace("T", " ")}.`
+      : "Only one scan loaded. Load a second scan, or scan again tomorrow, to see movement.",
+  },
+  arb: {
+    label: "Arbitrage", fk: "F3",
+    cols: [
+      { k: "name", h: "Instrument", f: it => nameCell(it) },
+      { k: "price", h: "AH", f: it => gold(it.price), cls: "num" },
+      { k: "sell", h: "Vendor Pays", f: it => gold(it.sell) },
+      { k: "backProfit", h: "Per Unit", f: it => gold(it.backProfit), cls: "pos" },
+      { k: "qty", h: "Qty", f: it => num(it.qty) },
+      { k: "backTotal", h: "If You Buy All", f: it => gold(it.backTotal), cls: "pos" },
+    ],
+    sort: "backTotal",
+    rows: () => S.items.filter(it => it.backProfit > 0 && it.price >= 100),
+    note: () => "Risk-free: these are listed below what a vendor pays for them. " +
+      "Vendor prices come from the AHEcon addon reading the game's own item data.",
+  },
+  flips: {
+    label: "Vendor Flips", fk: "F4",
+    cols: [
+      { k: "name", h: "Instrument", f: it => nameCell(it) },
+      { k: "vbuy", h: "Vendor Cost", f: it => gold(it.vbuy) },
+      { k: "price", h: "AH", f: it => gold(it.price), cls: "num" },
+      { k: "flipNet", h: "Net/Unit", f: it => gold(it.flipNet), cls: "pos" },
+      { k: "flipMult", h: "Mult", f: it => it.flipMult ? it.flipMult.toFixed(1) + "x" : "--" },
+      { k: "qty", h: "Listed", f: it => num(it.qty) },
+    ],
+    sort: "flipNet",
+    rows: () => S.items.filter(it => it.flipNet > 0 && it.flipMult >= 1.15),
+    note: () => "Vendors restock forever, so the limit is demand -- 'listed' is how " +
+      "many are already up. Net of a 5% auction cut.",
+  },
+  depth: {
+    label: "Depth", fk: "F5",
+    cols: [
+      { k: "name", h: "Instrument", f: it => nameCell(it) },
+      { k: "price", h: "Best", f: it => gold(it.price), cls: "num" },
+      { k: "next", h: "Next Rung", f: it => gold(it.next) },
+      { k: "gap", h: "Gap", f: it => pct(it.gap), cls: "num" },
+      { k: "rungs", h: "Rungs", f: it => num(it.rungs) },
+      { k: "qty", h: "Qty", f: it => num(it.qty) },
+    ],
+    sort: "gap",
+    rows: () => S.items.filter(it => it.rungs > 1),
+    note: () => {
+      const n = S.items.filter(it => it.ladder).length;
+      return n
+        ? `${n.toLocaleString()} items have ladder data. A wide gap means the cheapest listing is alone down there.`
+        : "No order-book depth in this scan. Depth is recorded per item as auction results come past while the AH is open, so it fills in as you browse and scan.";
+    },
+  },
+  load: { label: "Load Scans", fk: "F6", custom: true },
+};
+
+function nameCell(it) {
+  const q = it.qual == null ? 0 : it.qual;
+  const star = S.watch.has(it.id) ? "\u2022 " : "";
+  const nm = it.name || "#" + it.id;
+  return `<span class="q${Math.min(5, Math.max(0, q))}">${star}${esc(nm)}</span>`;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function spark(it) {
+  const h = it.hist;
+  if (!h || h.length < 2) {
+    return `<svg width="68" height="14" aria-hidden="true"></svg>`;
+  }
+  const ps = h.map(x => x[1]);
+  const lo = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
+  const w = 68, ht = 14;
+  const pts = ps.map((p, i) => {
+    const x = h.length === 1 ? 0 : (i / (h.length - 1)) * (w - 2) + 1;
+    const y = ht - 2 - ((p - lo) / rng) * (ht - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const rising = ps[ps.length - 1] >= ps[0];
+  const col = rising ? "var(--up)" : "var(--down)";
+  return `<svg width="${w}" height="${ht}" viewBox="0 0 ${w} ${ht}" aria-hidden="true">
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1"/>
+  </svg>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Rendering
+ * ------------------------------------------------------------------ */
+const el = id => document.getElementById(id);
+
+function buildKeys() {
+  const host = el("keys");
+  host.innerHTML = "";
+  Object.entries(SCREENS).forEach(([key, sc]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.role = "tab";
+    b.id = "tab-" + key;
+    b.setAttribute("aria-selected", key === S.screen);
+    b.innerHTML = `<span class="fk">${sc.fk}</span>${sc.label}`;
+    b.onclick = () => setScreen(key);
+    host.appendChild(b);
+  });
+}
+
+function setScreen(key) {
+  S.screen = key;
+  const sc = SCREENS[key];
+  if (sc.sort && S.sort.key !== sc.sort) S.sort = { key: sc.sort, dir: -1 };
+  [...el("keys").children].forEach(b =>
+    b.setAttribute("aria-selected", b.id === "tab-" + key));
+  render();
+}
+
+function derive() {
+  const prev = S.prev ? S.prev.byId : null;
+  for (const it of S.items) {
+    if (prev) {
+      const p = prev.get(it.id);
+      it.wasPrice = p ? p.price : null;
+      it.chg = p && p.price ? (it.price - p.price) / p.price * 100 : null;
+    } else { it.wasPrice = null; it.chg = null; }
+    it.absChg = it.chg == null ? -1 : Math.abs(it.chg);
+    it.backTotal = it.backProfit * (it.qty || 1);
+    it.flipNet = it.vbuy ? it.price * 0.95 - it.vbuy : 0;
+    const lad = it.ladder;
+    it.rungs = lad ? lad.length : 0;
+    it.next = lad && lad.length > 1 ? lad[1][0] : null;
+    it.gap = it.next && lad[0][0] ? (it.next - lad[0][0]) / lad[0][0] * 100 : null;
+  }
+}
+
+function filtered() {
+  const sc = SCREENS[S.screen];
+  let rows = sc.rows ? sc.rows() : S.items;
+  const q = S.q.trim().toLowerCase();
+  if (q) {
+    rows = rows.filter(it =>
+      (it.name && it.name.toLowerCase().includes(q)) || String(it.id) === q);
+  }
+  if (S.filters.named) rows = rows.filter(it => it.name);
+  if (S.filters.stock) rows = rows.filter(it => it.qty);
+  if (S.filters.watch) rows = rows.filter(it => S.watch.has(it.id));
+  const { key, dir } = S.sort;
+  rows = rows.slice().sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (key === "name") {
+      x = (a.name || "#" + a.id).toLowerCase();
+      y = (b.name || "#" + b.id).toLowerCase();
+      return x < y ? -dir : x > y ? dir : 0;
+    }
+    x = x == null ? -Infinity : x; y = y == null ? -Infinity : y;
+    return (x - y) * dir;
+  });
+  return rows;
+}
+
+function render() {
+  const sc = SCREENS[S.screen];
+  el("bar").hidden = !!sc.custom;
+  if (sc.custom) { renderLoad(); return; }
+  if (!S.cur) return;
+
+  derive();
+  S.view = filtered();
+  const grid = el("grid");
+  const rows = S.view.slice(0, 600);
+  const head = sc.cols.map(c => {
+    const sorted = S.sort.key === c.k;
+    const ar = sorted ? (S.sort.dir < 0 ? " \u25bc" : " \u25b2") : "";
+    return `<th ${sorted ? `aria-sort="${S.sort.dir < 0 ? "descending" : "ascending"}"` : ""}
+      data-k="${c.k}" ${c.sortable === false ? 'data-nosort="1"' : ""}>${c.h}<span class="ar">${ar}</span></th>`;
+  }).join("");
+  const body = rows.map(it => {
+    const tds = sc.cols.map(c => {
+      let cls = typeof c.cls === "function" ? c.cls(it) : (c.cls || "");
+      if (c.k === "name") cls = "name";
+      return `<td class="${cls}">${c.f(it)}</td>`;
+    }).join("");
+    return `<tr data-id="${it.id}" aria-selected="${S.sel === it.id}">${tds}</tr>`;
+  }).join("");
+  const note = sc.note ? `<div class="hint gutter" style="padding-block:7px;border-bottom:1px solid var(--line)">${esc(sc.note())}</div>` : "";
+  grid.innerHTML = note + (rows.length
+    ? `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+    : `<div class="empty">Nothing matches.<br>Clear the search or turn off "named only".</div>`);
+
+  grid.querySelectorAll("th").forEach(th => {
+    if (th.dataset.nosort) return;
+    th.onclick = () => {
+      const k = th.dataset.k;
+      S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : -1 };
+      render();
+    };
+  });
+  grid.querySelectorAll("tbody tr").forEach(tr => {
+    tr.onclick = () => select(Number(tr.dataset.id));
+  });
+  el("s-rows").textContent =
+    `${S.view.length.toLocaleString()} rows` +
+    (S.view.length > 600 ? " (showing 600)" : "");
+}
+
+function select(id) {
+  S.sel = id;
+  const it = S.cur.byId.get(id);
+  document.querySelectorAll("#grid tbody tr").forEach(tr =>
+    tr.setAttribute("aria-selected", Number(tr.dataset.id) === id));
+  if (!it) return;
+  el("itemname").textContent = it.name || "#" + it.id;
+  const bits = [`id ${it.id}`];
+  if (it.ilvl) bits.push(`ilvl ${it.ilvl}`);
+  if (it.stack && it.stack > 1) bits.push(`stack ${it.stack}`);
+  el("itemsub").textContent = bits.join("  \u00b7  ");
+
+  const kv = [];
+  const push = (k, v) => kv.push(`<div class="kv"><span>${k}</span><b>${v}</b></div>`);
+  push("Last", gold(it.price));
+  push("Quantity", num(it.qty));
+  push("Listed value", gold(it.value));
+  push("Min ever seen", gold(it.minSeen));
+  if (it.sell) push("Vendor pays", gold(it.sell));
+  if (it.vbuy) push("Vendor charges", gold(it.vbuy));
+  if (it.chg != null) push("vs previous scan", pct(it.chg));
+
+  let html = kv.join("");
+  if (it.hist && it.hist.length > 1) {
+    html += `<div class="dk-h">Price history</div>` + bigChart(it.hist);
+  }
+  if (it.ladder && it.ladder.length) {
+    const maxQ = Math.max(...it.ladder.map(r => r[1] || 0)) || 1;
+    html += `<div class="dk-h">Order book</div><table class="ladder">` +
+      it.ladder.map(([u, q]) =>
+        `<tr><td style="color:var(--amber);width:7ch">${gold(u)}</td>
+             <td style="width:5ch;color:var(--mute)">${num(q)}</td>
+             <td><span class="bar" style="width:${Math.max(2, (q / maxQ) * 100)}%"></span></td></tr>`
+      ).join("") + `</table>`;
+  }
+  if (it.backProfit > 0) {
+    html += `<div class="dk-h">Vendor sell-back</div>
+      <div class="hint">Listed at ${gold(it.price)}, a vendor pays ${gold(it.sell)}.
+      That is ${gold(it.backProfit)} a unit, ${gold(it.backTotal)} for all ${num(it.qty)}.</div>`;
+  }
+  if (it.posts) {
+    html += `<div class="dk-h">Your postings</div>` + it.posts.map(p =>
+      `<div class="kv"><span>${p.t ? new Date(p.t * 1000).toISOString().slice(5, 16).replace("T", " ") : "--"}
+        \u00d7${p.qty || 1}</span><b>${gold(p.price)}</b></div>`).join("");
+  }
+  html += `<div class="dk-h">Watchlist</div>
+    <div class="hint">Press <kbd>W</kbd> to ${S.watch.has(it.id) ? "remove" : "add"} this item.</div>`;
+  el("dockbody").innerHTML = html;
+}
+
+function bigChart(hist) {
+  const w = 272, h = 76, pad = 22;
+  const ps = hist.map(x => x[1]);
+  const lo = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
+  const x = i => hist.length === 1 ? pad : pad + (i / (hist.length - 1)) * (w - pad - 6);
+  const y = p => h - 16 - ((p - lo) / rng) * (h - 30);
+  const line = hist.map((d, i) => `${x(i).toFixed(1)},${y(d[1]).toFixed(1)}`).join(" ");
+  const area = `${x(0).toFixed(1)},${(h - 16).toFixed(1)} ${line} ${x(hist.length - 1).toFixed(1)},${(h - 16).toFixed(1)}`;
+  return `<svg width="100%" viewBox="0 0 ${w} ${h}" role="img"
+      aria-label="Price history, ${gold(lo)} to ${gold(hi)}">
+    <polygon points="${area}" fill="rgba(240,168,37,.13)"/>
+    <polyline points="${line}" fill="none" stroke="var(--amber)" stroke-width="1.4"/>
+    <circle cx="${x(hist.length - 1).toFixed(1)}" cy="${y(ps[ps.length - 1]).toFixed(1)}"
+      r="2.4" fill="var(--amber)"/>
+    <text x="2" y="12" fill="var(--mute)" font-size="8" font-family="var(--mono)">${esc(gold(hi))}</text>
+    <text x="2" y="${h - 18}" fill="var(--mute)" font-size="8" font-family="var(--mono)">${esc(gold(lo))}</text>
+    <text x="${pad}" y="${h - 4}" fill="var(--mute)" font-size="8" font-family="var(--mono)">${fmtDay(hist[0][0])}</text>
+    <text x="${w - 6}" y="${h - 4}" text-anchor="end" fill="var(--mute)" font-size="8"
+      font-family="var(--mono)">${fmtDay(hist[hist.length - 1][0])}</text>
+  </svg>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Load screen
+ * ------------------------------------------------------------------ */
+function renderLoad() {
+  const grid = el("grid");
+  const rows = S.scans.map((s, i) => `
+    <tr><td class="name">${esc(s.uploader || "?")}</td>
+        <td>${esc(s.realm || "?")}</td>
+        <td>${esc((s.scan || "").slice(0, 16).replace("T", " "))}</td>
+        <td class="num">${(s.n || 0).toLocaleString()}</td>
+        <td class="muted">${i === 0 ? "current" : "history"}</td></tr>`).join("");
+  grid.innerHTML = `
+    <div class="gutter" style="padding-block:14px;max-width:720px">
+      <div id="drop">
+        <h3>Load a scan</h3>
+        <p>Drop <code>Auctionator.lua</code> here. Add <code>AHEcon.lua</code>
+           alongside it and items get their names instead of ids.</p>
+        <p>Both are read in your browser: the Lua tables and the packed price
+           database are decoded here, and nothing leaves this device unless you
+           publish it to the shared pool.</p>
+        <button type="button" id="pick">Choose files</button>
+        <input type="file" id="file" accept=".lua,.json" multiple>
+      </div>
+      <div class="sv">
+        <b>Where the file lives</b><br>
+        <code>World of Warcraft\\_forever_\\WTF\\Account\\&lt;your account&gt;\\SavedVariables\\Auctionator.lua</code><br>
+        Run a full scan at the auction house, then <code>/reload</code> before copying it —
+        the game only writes that file on reload or logout.
+      </div>
+      <div class="dk-h">Loaded scans</div>
+      ${S.scans.length ? `<table><thead><tr>
+          <th>Uploader</th><th>Realm</th><th>Scan</th><th>Items</th><th>Role</th>
+        </tr></thead><tbody>${rows}</tbody></table>`
+        : `<div class="empty">No scans loaded.</div>`}
+      <div class="dk-h">Shared pool <span class="pill ${S.canWrite ? "ok" : "no"}">${S.canWrite ? "can publish" : "read only"}</span></div>
+      <div class="hint" id="poolnote"></div>
+      <div class="dk-h">Log</div>
+      <div id="log"></div>
+    </div>`;
+
+  el("poolnote").innerHTML = S.db
+    ? (S.canWrite
+      ? `Scans you load here can be published to the shared pool so everyone with
+         access to this page sees them. <button type="button" id="pub"
+         style="background:var(--amber);color:#15100a;border:0;padding:5px 10px;
+         font:600 11px var(--mono);cursor:pointer;margin-left:6px">Publish current scan</button>`
+      : `You can read the shared pool but not write to it. Publishing needs
+         Contributor access to this page.`)
+    : `The shared pool is not available in this view, so scans you load stay on
+       this device. Everything else works.`;
+  const pub = el("pub");
+  if (pub) pub.onclick = publishCurrent;
+
+  const drop = el("drop"), file = el("file");
+  el("pick").onclick = () => file.click();
+  file.onchange = () => { if (file.files.length) readFiles(file.files); };
+  ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.add("over");
+  }));
+  ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.remove("over");
+  }));
+  drop.addEventListener("drop", e => {
+    if (e.dataTransfer.files.length) readFiles(e.dataTransfer.files);
+  });
+  flushLog();
+}
+
+const LOG = [];
+function log(msg) {
+  LOG.push(new Date().toTimeString().slice(0, 8) + "  " + msg);
+  flushLog();
+}
+function flushLog() {
+  const n = el("log");
+  if (n) n.textContent = LOG.slice(-40).join("\n");
+}
+
+const readAsBuffer = f => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onerror = () => rej(new Error("could not read " + f.name));
+  r.onload = () => res(r.result);
+  r.readAsArrayBuffer(f);
+});
+
+/* Takes Auctionator.lua, AHEcon.lua and exported .json, in any order and
+   any combination. Details files are applied first so names land. */
+async function readFiles(list) {
+  const files = [...list];
+  files.sort((a, b) => rank(a.name) - rank(b.name));
+  let loaded = 0;
+  for (const f of files) {
+    log(`reading ${f.name} (${(f.size / 1024).toFixed(0)} KB)…`);
+    try {
+      const buf = await readAsBuffer(f);
+      if (/\.json$/i.test(f.name)) {
+        const pk = JSON.parse(new TextDecoder().decode(buf));
+        if (!pk || !pk.n) throw new Error("not a scan export");
+        applyDetails(pk);
+        addScan(pk);
+        loaded++;
+        log(`loaded ${pk.n.toLocaleString()} items from realm ${pk.realm}.`);
+        continue;
+      }
+      const g = luaParse(latin1(buf));
+      if (g.AHECON_ITEMS || g.AHECON_NAMES) {
+        readAHEcon(g, S.details);
+        const n = Object.keys(S.details.names).length;
+        log(`item details: ${n.toLocaleString()} names known.`);
+        let filled = 0;
+        for (const pk of S.scans) filled += applyDetails(pk);
+        if (filled) log(`filled in ${filled.toLocaleString()} names on loaded scans.`);
+        if (S.scans.length) recompute();
+      }
+      if (g.AUCTIONATOR_PRICE_DATABASE) {
+        const pk = parseAuctionator(buf, uploaderName(), f.lastModified);
+        if (!pk.n) throw new Error("no priced items in the price database");
+        applyDetails(pk);
+        addScan(pk);
+        loaded++;
+        log(`loaded ${pk.n.toLocaleString()} items from realm ${pk.realm}.`);
+      } else if (!g.AHECON_ITEMS && !g.AHECON_NAMES) {
+        throw new Error("no auction data in this file");
+      }
+    } catch (err) {
+      log(`${f.name} failed: ${err && err.message ? err.message : err}`);
+    }
+  }
+  if (loaded) setScreen("market");
+  else renderLoad();
+}
+const rank = n => /ahecon/i.test(n) ? 0 : 1;
+function latin1(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return s;
+}
+function uploaderName() {
+  // prompt() is inert in the viewer, so take the name from who is signed in.
+  return (S.user && S.user.name) || "me";
+}
+
+function addScan(pk) {
+  S.scans = S.scans.filter(s => !(s.scan === pk.scan && s.uploader === pk.uploader));
+  S.scans.push(pk);
+  S.scans.sort((a, b) => String(b.scan).localeCompare(String(a.scan)));
+  recompute();
+}
+
+function recompute() {
+  if (!S.scans.length) return;
+  S.cur = expand(S.scans[0]);
+  S.items = S.cur.items;
+  const other = S.scans.slice(1).find(s => s.realm === S.scans[0].realm);
+  S.prev = other ? expand(other) : null;
+  paintRail();
+  render();
+  if (S.sel && S.cur.byId.has(S.sel)) select(S.sel);
+}
+
+function paintRail() {
+  const pk = S.cur.pk, items = S.items;
+  el("s-realm").textContent = pk.realm || "--";
+  const t = String(pk.scan || "").slice(0, 16).replace("T", " ");
+  el("s-scan").textContent = t || "--";
+  const age = (Date.now() - Date.parse(pk.scan)) / 3600000;
+  el("s-scan").className = isFinite(age) && age > 36 ? "stale" : "live";
+  el("s-n").textContent = items.length.toLocaleString();
+  el("s-val").textContent = gold(items.reduce((a, it) => a + it.value, 0));
+  const ps = items.map(it => it.price).sort((a, b) => a - b);
+  el("s-med").textContent = ps.length ? gold(ps[Math.floor(ps.length / 2)]) : "--";
+  el("s-pool").textContent = S.pool;
+}
+
+/* ------------------------------------------------------------------ *
+ * Shared pool
+ * ------------------------------------------------------------------ */
+async function publishCurrent() {
+  if (!S.db || !S.cur) return;
+  const pk = S.cur.pk;
+  const id = `${(pk.realm || "x").replace(/[^A-Za-z0-9_.~:@+-]/g, "_")}_${(pk.uploader || "me").replace(/[^A-Za-z0-9_.~:@+-]/g, "_")}_${String(pk.scan).replace(/[^0-9]/g, "").slice(0, 14)}`;
+  log("publishing to the shared pool…");
+  try {
+    const parts = chunkPacked(pk);
+    await S.db.doc("scans/" + id).set({
+      realm: pk.realm, uploader: pk.uploader, scan: pk.scan,
+      n: pk.n, parts: parts.length, at: Date.now(),
+    });
+    for (let i = 0; i < parts.length; i++) {
+      await S.db.doc("scans/" + id).collection("parts").doc("p" + i).set(parts[i]);
+    }
+    log(`published ${parts.length} part(s) as ${id}.`);
+  } catch (e) {
+    log("publish failed: " + (e && e.code ? e.code : e));
+  }
+}
+
+function chunkPacked(pk, limit = 200000) {
+  const COLS = ["id", "nm", "p", "q", "ms", "s", "st", "ql", "il", "vb"];
+  const whole = JSON.stringify(pk);
+  if (whole.length <= limit) return [{ part: 0, parts: 1, lo: 0, ...pk }];
+  const parts = Math.max(2, Math.ceil(whole.length / limit));
+  const step = Math.ceil(pk.n / parts);
+  const out = [];
+  for (let pi = 0; pi < parts; pi++) {
+    const lo = pi * step, hi = Math.min(pk.n, lo + step);
+    if (lo >= hi) break;
+    const part = { part: pi, parts, lo, n: hi - lo, schema: pk.schema,
+      realm: pk.realm, scan: pk.scan, uploader: pk.uploader };
+    for (const c of COLS) part[c] = pk[c] ? pk[c].slice(lo, hi) : null;
+    part.hist = {};
+    for (const d of Object.keys(pk.hist || {})) {
+      const v = pk.hist[d].filter(([i]) => i >= lo && i < hi)
+        .map(([i, p]) => [i - lo, p]);
+      if (v.length) part.hist[d] = v;
+    }
+    part.ld = null;
+    if (pk.ld) {
+      const sub = {};
+      for (const k of Object.keys(pk.ld)) {
+        const i = Number(k);
+        if (i >= lo && i < hi) sub[String(i - lo)] = pk.ld[k];
+      }
+      part.ld = Object.keys(sub).length ? sub : null;
+    }
+    part.posts = pi === 0 ? pk.posts : [];
+    out.push(part);
+  }
+  return out;
+}
+
+function mergeParts(parts) {
+  parts.sort((a, b) => (a.part || 0) - (b.part || 0));
+  const COLS = ["id", "nm", "p", "q", "ms", "s", "st", "ql", "il", "vb"];
+  const base = parts[0];
+  const out = { schema: base.schema, realm: base.realm, scan: base.scan,
+    uploader: base.uploader, n: 0, hist: {}, ld: null, posts: [] };
+  for (const c of COLS) out[c] = [];
+  let off = 0;
+  for (const p of parts) {
+    for (const c of COLS) {
+      if (p[c]) out[c] = out[c].concat(p[c]);
+      else for (let i = 0; i < p.n; i++) out[c].push(null);
+    }
+    for (const d of Object.keys(p.hist || {})) {
+      (out.hist[d] = out.hist[d] || []).push(
+        ...p.hist[d].map(([i, v]) => [i + off, v]));
+    }
+    if (p.ld) {
+      out.ld = out.ld || {};
+      for (const k of Object.keys(p.ld)) out.ld[String(Number(k) + off)] = p.ld[k];
+    }
+    if (p.posts && p.posts.length) out.posts.push(...p.posts);
+    off += p.n;
+  }
+  out.n = out.id.length;
+  return out;
+}
+
+async function connectPool() {
+  let db = null, user = null;
+  try { db = await claude.use("db"); } catch (e) { db = null; }
+  try { user = await claude.use("user"); } catch (e) { user = null; }
+  S.db = db; S.user = null;
+  if (user) {
+    try {
+      const me = await user.me();
+      S.user = me || null;
+      S.canWrite = (await user.can("data.write")) !== false;
+    } catch (e) { S.canWrite = false; }
+  }
+  if (!db) { S.pool = "local"; if (S.cur) paintRail(); return; }
+  S.pool = "shared";
+  try {
+    const snap = await db.collection("scans").orderBy("scan", "desc").limit(12).get();
+    if (snap.empty) { log("shared pool is empty."); if (S.cur) paintRail(); return; }
+    for (const d of snap.docs) {
+      const head = d.data();
+      const ps = await db.doc("scans/" + d.id).collection("parts").get();
+      if (ps.empty) continue;
+      const merged = mergeParts(ps.docs.map(x => x.data()));
+      merged.uploader = head.uploader || merged.uploader;
+      merged.realm = head.realm || merged.realm;
+      merged.scan = head.scan || merged.scan;
+      addScan(merged);
+      log(`pool: ${merged.uploader} / ${merged.realm} / ${merged.n.toLocaleString()} items`);
+    }
+  } catch (e) {
+    log("could not read the shared pool: " + (e && e.code ? e.code : e));
+  }
+  if (S.cur) paintRail();
+}
+
+/* ------------------------------------------------------------------ *
+ * Keyboard
+ * ------------------------------------------------------------------ */
+document.addEventListener("keydown", e => {
+  const inField = e.target instanceof HTMLInputElement;
+  if (e.key === "/" && !inField) { e.preventDefault(); el("q").focus(); return; }
+  if (e.key === "Escape" && inField) { el("q").blur(); return; }
+  const fk = { F1: "market", F2: "movers", F3: "arb", F4: "flips", F5: "depth", F6: "load" };
+  if (fk[e.key]) { e.preventDefault(); setScreen(fk[e.key]); return; }
+  if (inField) return;
+  const keys = Object.keys(SCREENS);
+  if (/^[1-6]$/.test(e.key)) { setScreen(keys[+e.key - 1]); return; }
+  if ((e.key === "w" || e.key === "W") && S.sel != null) {
+    if (S.watch.has(S.sel)) S.watch.delete(S.sel); else S.watch.add(S.sel);
+    saveWatch(); render(); select(S.sel); return;
+  }
+  if (e.key === "ArrowDown" || e.key === "j" || e.key === "ArrowUp" || e.key === "k") {
+    if (!S.view.length) return;
+    e.preventDefault();
+    const down = e.key === "ArrowDown" || e.key === "j";
+    const i = S.view.findIndex(it => it.id === S.sel);
+    const next = i < 0 ? 0 : Math.min(S.view.length - 1, Math.max(0, i + (down ? 1 : -1)));
+    select(S.view[next].id);
+    const tr = document.querySelector(`#grid tbody tr[data-id="${S.view[next].id}"]`);
+    if (tr) tr.scrollIntoView({ block: "nearest" });
+  }
+});
+
+el("q").addEventListener("input", e => { S.q = e.target.value; render(); });
+[["chip-stock", "stock"], ["chip-named", "named"], ["chip-watch", "watch"]]
+  .forEach(([id, key]) => {
+    el(id).onclick = () => {
+      S.filters[key] = !S.filters[key];
+      el(id).setAttribute("aria-pressed", S.filters[key]);
+      render();
+    };
+  });
+
+/* ------------------------------------------------------------------ *
+ * Boot
+ * ------------------------------------------------------------------ */
+buildKeys();
+(async function boot() {
+  try {
+    const r = await fetch("scan.json", { cache: "no-store" });
+    if (r.ok) {
+      const pk = await r.json();
+      addScan(pk);
+      log(`baseline scan: ${pk.n.toLocaleString()} items, realm ${pk.realm}.`);
+    } else throw new Error("HTTP " + r.status);
+  } catch (e) {
+    el("grid").innerHTML = `<div class="empty">
+      No baseline scan published with this page.<br>
+      Press <kbd>F6</kbd> and drop your <code>Auctionator.lua</code> to load one.</div>`;
+    log("no baseline scan.json alongside the page.");
+  }
+  connectPool();
+})();
+</script>

@@ -42,6 +42,14 @@ forever, so long-run trends survive after Auctionator rolls its window.
 Useful flags: `--top 30`, `--min-move 5`, `--discount 15`, `--ah-cut 5`,
 `--min-margin 15`, `--thin 5 --thin-floor 50000`, `--realm PvE`.
 
+Two floors keep the noise out, and both are tunable. A percentage on a penny
+base is arithmetic rather than a market, so a mover needs both prices over
+`--min-price` (1s) and an absolute change of at least `--min-move-abs` (1s).
+And vendor sell-back is ranked by total rather than per-unit margin, since
+buying costs no fee: `--min-total` (25s) is the least total worth the walk.
+`--min-total 1` shows the near misses. The web terminal applies the same
+floors, and says so on each screen.
+
 ## What the report shows
 
 - **Biggest markets by total listed value** — where the gold actually is.

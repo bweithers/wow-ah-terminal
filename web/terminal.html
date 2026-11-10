@@ -550,6 +550,7 @@ const S = {
   view: [],
   screen: "market",
   sel: null,
+  screenRows: 0,
   sort: { key: "value", dir: -1 },
   q: "",
   filters: { stock: false, named: true, watch: false },
@@ -612,6 +613,17 @@ function expand(pk) {
  * Screens
  * ------------------------------------------------------------------ */
 const money = (it, k) => gold(it[k]);
+/* Floors, in copper. A percentage on a penny base is arithmetic, not a
+   market: one junk listing at 1c turns any real price into "+9900%". And a
+   margin worth less than the walk to a vendor is not an opportunity. These
+   live here so they are easy to argue with. */
+const FLOOR = {
+  price: 100,     // 1s -- ignore markets trading below this either side
+  move: 100,      // 1s -- and ignore moves smaller than this in absolute terms
+  backTotal: 2500,// 25s -- least total worth buying out and vendoring
+  flipNet: 10,    // 1s/unit is too strict for flips; a copper is too loose
+};
+
 const SCREENS = {
   market: {
     label: "Market", fk: "1",
@@ -635,10 +647,19 @@ const SCREENS = {
       { k: "value", h: "Listed Value", f: it => gold(it.value), cls: "num" },
     ],
     sort: "absChg",
-    rows: () => S.items.filter(it => it.chg != null && Math.abs(it.chg) >= 1),
+    rows: () => S.items.filter(it =>
+      it.chg != null && Math.abs(it.chg) >= 1
+      && Math.min(it.price, it.wasPrice) >= FLOOR.price
+      && Math.abs(it.price - it.wasPrice) >= FLOOR.move),
     note: () => S.prev
-      ? `Comparing scan ${S.cur.pk.scan.slice(0, 16).replace("T", " ")} against ${S.prev.pk.scan.slice(0, 16).replace("T", " ")}.`
+      ? `Comparing scan ${S.cur.pk.scan.slice(0, 16).replace("T", " ")} against `
+        + `${S.prev.pk.scan.slice(0, 16).replace("T", " ")}. Both prices are over `
+        + `${gold(FLOOR.price)} and the move is at least ${gold(FLOOR.move)}, so a `
+        + `lone junk listing cannot top the table.`
       : "Only one scan loaded. Load a second scan, or scan again tomorrow, to see movement.",
+    none: () => S.prev
+      ? `Nothing moved by ${gold(FLOOR.move)} or more between these two scans.`
+      : "Load a second scan on screen <kbd>6</kbd> to compare prices.",
   },
   arb: {
     label: "Arbitrage", fk: "3",
@@ -651,9 +672,17 @@ const SCREENS = {
       { k: "backTotal", h: "If You Buy All", f: it => gold(it.backTotal), cls: "pos" },
     ],
     sort: "backTotal",
-    rows: () => S.items.filter(it => it.backProfit > 0 && it.price >= 100),
-    note: () => "Risk-free: these are listed below what a vendor pays for them. " +
-      "Vendor prices come from the AHEcon addon reading the game's own item data.",
+    // Buying costs no fee, so the margin is clean and the total is what
+    // matters -- a copper a unit across a thousand units is still gold.
+    rows: () => S.items.filter(it =>
+      it.backProfit > 0 && it.backTotal >= FLOOR.backTotal),
+    note: () => "Risk-free: these are listed below what a vendor pays for them. "
+      + "Vendor prices come from the AHEcon addon reading the game's own item "
+      + `data. Showing anything worth ${gold(FLOOR.backTotal)} or more in total.`,
+    none: () => `Nothing is listed far enough below a vendor's price to clear `
+      + `${gold(FLOOR.backTotal)} in total. This is the screen that is usually `
+      + `empty &mdash; it fills when somebody misprices a stack. `
+      + `<code>python ah.py report --min-total 1</code> lists the near misses.`,
   },
   flips: {
     label: "Vendor Flips", fk: "4",
@@ -666,11 +695,15 @@ const SCREENS = {
       { k: "qty", h: "Listed", f: it => num(it.qty) },
     ],
     sort: "flipNet",
-    // 10c floor: a sub-copper margin on arrows is not a trade once the
-    // auction cut and the deposit are paid.
-    rows: () => S.items.filter(it => it.flipNet >= 10 && it.flipMult >= 1.15),
-    note: () => "Vendors restock forever, so the limit is demand -- 'listed' is how " +
-      "many are already up. Net of a 5% auction cut, margins under 10c dropped.",
+    // A sub-copper margin on arrows is not a trade once the auction cut
+    // and the deposit are paid.
+    rows: () => S.items.filter(it =>
+      it.flipNet >= FLOOR.flipNet && it.flipMult >= 1.15),
+    note: () => "Vendors restock forever, so the limit is demand -- 'listed' is how "
+      + "many are already up. Net of a 5% auction cut, with margins under "
+      + `${gold(FLOOR.flipNet)} a unit dropped.`,
+    none: () => "No vendor-bought item is selling high enough on the AH to be "
+      + "worth the cut. Visit more vendors: the price cache fills as you shop.",
   },
   depth: {
     label: "Depth", fk: "5",
@@ -690,6 +723,8 @@ const SCREENS = {
         ? `${n.toLocaleString()} items have ladder data. A wide gap means the cheapest listing is alone down there.`
         : "No order-book depth in this scan. Depth is recorded per item as auction results come past while the AH is open, so it fills in as you browse and scan.";
     },
+    none: () => "No price ladders in this scan yet. Open the auction house with "
+      + "the AHEcon addon running, search a few items, then <code>/reload</code>.",
   },
   load: { label: "Load Scans", fk: "6", custom: true },
 };
@@ -777,6 +812,8 @@ function derive() {
 function filtered() {
   const sc = SCREENS[S.screen];
   let rows = sc.rows ? sc.rows() : S.items;
+  // so an empty grid can say which of the two reasons emptied it
+  S.screenRows = rows.length;
   const q = S.q.trim().toLowerCase();
   if (q) {
     rows = rows.filter(it =>
@@ -826,7 +863,9 @@ function render() {
   const note = sc.note ? `<div class="hint gutter" style="padding-block:7px;border-bottom:1px solid var(--line)">${esc(sc.note())}</div>` : "";
   grid.innerHTML = note + (rows.length
     ? `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
-    : `<div class="empty">Nothing matches.<br>Clear the search or turn off "named only".</div>`);
+    : `<div class="empty">${S.screenRows
+        ? 'Nothing matches.<br>Clear the search or turn off "named only".'
+        : (sc.none ? sc.none() : "Nothing to show here for this scan.")}</div>`);
 
   grid.querySelectorAll("th").forEach(th => {
     if (th.dataset.nosort) return;

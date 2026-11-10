@@ -578,11 +578,21 @@ def cmd_report(cfg, args):
             if not it["id"].isdigit():
                 continue
             s = sells.get(int(it["id"]))
-            if s and it["price"] < s and it["price"] >= args.min_price:
-                backs.append((it, s, s - it["price"]))
+            if not s or it["price"] >= s:
+                continue
+            per = s - it["price"]
+            # buying costs no fee, so the margin is clean and the total is
+            # what matters: a copper a unit over a thousand units is gold
+            if per * (it["qty"] or 1) >= args.min_total:
+                backs.append((it, s, per))
         backs.sort(key=lambda r: -(r[2] * (r[0]["qty"] or 1)))
+        under = sum(1 for it in priced
+                    if it["id"].isdigit()
+                    and sells.get(int(it["id"]))
+                    and it["price"] < sells[int(it["id"])])
         print(f"    sell prices known for {len(sells):,} items; "
-              f"{len(backs):,} are listed under theirs")
+              f"{under:,} are listed under theirs, {len(backs):,} by at least "
+              f"{gold(args.min_total)} in total")
         print(table(
             [[label(it), gold(it["price"]), gold(s), gold(p),
               int(it["qty"]) if it["qty"] else "-", gold(p * (it["qty"] or 1))]
@@ -648,11 +658,15 @@ def cmd_report(cfg, args):
             if not p:
                 continue
             d = (it["price"] - p) / p * 100
-            if abs(d) >= args.min_move:
+            # a percentage on a penny base is arithmetic, not a market
+            if (abs(d) >= args.min_move
+                    and min(it["price"], p) >= args.min_price
+                    and abs(it["price"] - p) >= args.min_move_abs):
                 moves.append((it, p, d))
         moves.sort(key=lambda r: -abs(r[2]))
         print(f"    {prev['source_mtime'][:16].replace('T',' ')}  ->  {scan_ts}"
-              f"   (moves >= {args.min_move:.0f}%)")
+              f"   (moves >= {args.min_move:.0f}% and {gold(args.min_move_abs)}, "
+              f"both prices over {gold(args.min_price)})")
         print(table(
             [[label(it), gold(p), gold(it["price"]), pct(d),
               int(it["qty"]) if it["qty"] else "-"]
@@ -897,6 +911,12 @@ def main(argv=None):
                         help="min %% markup over vendor cost for a flip")
     common.add_argument("--min-price", type=float, default=100,
                         help="ignore items under this unit price (copper)")
+    common.add_argument("--min-move-abs", type=float, default=100,
+                        help="movers: min absolute change (copper), so a penny "
+                             "base cannot produce a huge percentage")
+    common.add_argument("--min-total", type=float, default=2500,
+                        help="vendor sell-back: min total profit (copper) "
+                             "worth buying out")
     common.add_argument("--depth", type=int, default=4, help="discover: tree depth")
     common.add_argument("--out", help="export: csv path")
     # pool

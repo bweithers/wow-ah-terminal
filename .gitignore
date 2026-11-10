@@ -11,3 +11,6 @@ addon/ItemIDs.lua
 web/pool.js
 
 data/watch-state.json
+
+# the Supabase CLI keeps its link state here
+supabase/

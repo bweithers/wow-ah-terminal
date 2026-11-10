@@ -53,11 +53,49 @@ DEFAULT_CONFIG = {
 # paths / config
 # --------------------------------------------------------------------------- #
 
+def _win_drives() -> list[str]:
+    try:
+        import ctypes
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+    except Exception:
+        return ["C:\\", "D:\\"]
+    return [f"{chr(65 + i)}:\\" for i in range(26) if mask >> i & 1]
+
+
+def detect_wow_dir(flavor: str) -> str | None:
+    """Find a WoW install with this flavor's SavedVariables in it.
+
+    A friend's copy of this tool starts with someone else's path in the
+    default config, so look for theirs rather than making them edit JSON.
+    """
+    roots: list[str] = []
+    if sys.platform == "win32":
+        for d in _win_drives():
+            for sub in ("", "Games", "Program Files (x86)", "Program Files",
+                        os.path.join("Program Files (x86)", "Battle.net")):
+                roots.append(os.path.join(d, sub, "World of Warcraft"))
+    else:
+        roots += ["/Applications/World of Warcraft",
+                  os.path.expanduser("~/Applications/World of Warcraft")]
+    for r in roots:
+        try:
+            if os.path.isdir(os.path.join(r, flavor, "WTF", "Account")):
+                return os.path.normpath(r)
+        except OSError:
+            continue
+    return None
+
+
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG):
         with open(CONFIG, encoding="utf-8") as fh:
             cfg.update(json.load(fh))
+    flavor = cfg.get("flavor") or "_forever_"
+    if not os.path.isdir(os.path.join(cfg.get("wow_dir") or "", flavor, "WTF")):
+        found = detect_wow_dir(flavor)
+        if found:
+            cfg["wow_dir"] = found
     return cfg
 
 
@@ -861,14 +899,46 @@ def main(argv=None):
                         help="ignore items under this unit price (copper)")
     common.add_argument("--depth", type=int, default=4, help="discover: tree depth")
     common.add_argument("--out", help="export: csv path")
+    # pool
+    common.add_argument("--project-ref", help="pool-init: Supabase project ref")
+    common.add_argument("--org-id", help="pool-init: Supabase organization")
+    common.add_argument("--name", help="pool-init: project name")
+    common.add_argument("--region", help="pool-init: project region")
+    common.add_argument("--create", action="store_true",
+                        help="pool-init: create the project if it is missing")
+    common.add_argument("--url", help="pool-join: https://<ref>.supabase.co")
+    common.add_argument("--key", help="pool-join: the publishable key")
+    common.add_argument("--bucket", help="pool-join: storage bucket")
+    common.add_argument("--uploader", help="the name your scans are filed under")
+    common.add_argument("--days", type=int, default=3,
+                        help="push: days of price history to send")
+    common.add_argument("--full", action="store_true",
+                        help="push: send every day of history, not just --days")
+    common.add_argument("--all", action="store_true",
+                        help="pull: every scan, not just the newest per person")
+    common.add_argument("--limit", type=int, default=25,
+                        help="pull/pool: how many scans to consider")
+    common.add_argument("--interval", type=int, default=30,
+                        help="watch: seconds between checks")
+    common.add_argument("--once", action="store_true",
+                        help="watch: check once and exit (for Task Scheduler)")
+    common.add_argument("--port", type=int, default=8731, help="ui: local port")
+    common.add_argument("--no-browser", action="store_true",
+                        help="ui: do not open a browser")
 
     ap = argparse.ArgumentParser(
         description=__doc__, parents=[common],
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
+    ap.set_defaults(invite=None)
+    made = {}
     for name in ("status", "discover", "snapshot", "report", "refresh",
-                 "export", "sync-ids", "publish"):
-        sub.add_parser(name, parents=[common])
+                 "export", "sync-ids", "publish",
+                 "pool", "pool-init", "pool-join", "push", "pull", "watch",
+                 "ui"):
+        made[name] = sub.add_parser(name, parents=[common])
+    made["pool-join"].add_argument(
+        "invite", nargs="?", help="the invite line you were sent")
     args = ap.parse_args(argv)
 
     os.makedirs(DATA, exist_ok=True)
@@ -877,7 +947,8 @@ def main(argv=None):
         with open(CONFIG, "w", encoding="utf-8") as fh:
             json.dump(cfg, fh, indent=2)
 
-    {
+    cmd = args.cmd or "status"
+    local = {
         "status": cmd_status,
         "discover": cmd_discover,
         "snapshot": lambda c, a: do_snapshot(c),
@@ -886,7 +957,26 @@ def main(argv=None):
         "export": cmd_export,
         "sync-ids": cmd_sync_ids,
         "publish": cmd_publish,
-    }[args.cmd or "status"](cfg, args)
+    }
+    if cmd in local:
+        local[cmd](cfg, args)
+        return 0
+
+    # pool commands get this module so they can reuse the reader
+    import poolcli
+    import pool as _pool
+    try:
+        {
+            "pool": poolcli.cmd_pool,
+            "pool-init": poolcli.cmd_pool_init,
+            "pool-join": poolcli.cmd_pool_join,
+            "push": poolcli.cmd_push,
+            "pull": poolcli.cmd_pull,
+            "watch": poolcli.cmd_watch,
+            "ui": poolcli.cmd_ui,
+        }[cmd](sys.modules[__name__], cfg, args)
+    except _pool.PoolError as e:
+        raise SystemExit(f"Pool: {e}")
     return 0
 
 

@@ -30,6 +30,13 @@ forever, so long-run trends survive after Auctionator rolls its window.
 | `python ah.py sync-ids` | write `ItemIDs.lua` for the addon to resolve |
 | `python ah.py publish` | push a scan into a shared git repo (needs `repo_dir`) |
 | `python ah.py discover` | dump the raw shape of the saved data |
+| `python ah.py ui` | serve the terminal locally, where it can reach the pool |
+| `python ah.py pool` | what is in the shared pool, and your invite line |
+| `python ah.py pool-init` | create the Supabase pool (owner, once) |
+| `python ah.py pool-join` | join someone else's pool from their invite |
+| `python ah.py push` | send your latest scan to the pool |
+| `python ah.py pull` | download the pool's scans into `data/pool/` |
+| `python ah.py watch` | upload every scan from now on, automatically |
 
 Useful flags: `--top 30`, `--min-move 5`, `--discount 15`, `--ah-cut 5`,
 `--min-margin 15`, `--thin 5 --thin-floor 50000`, `--realm PvE`.
@@ -63,19 +70,74 @@ bare ids.
 
 ### Pooling scans with friends
 
-Each loaded scan can be published to a store shared by everyone who can open
-the page, so you all see each other's markets and the Movers screen can compare
-across scans.
+Scans pool through a Supabase project on the free tier. One person creates it;
+everyone else joins with a single line.
 
-Two things to know:
+**The owner, once:**
 
-- Publishing needs **Contributor** access to the artifact (Share menu). Anyone
-  signed in who can open the page can *read* the pool; writing is gated.
-- A friend who can only read still gets everything else — they drop their own
-  file and it stays on their device.
+```
+npx supabase login            # opens a browser, approve it there
+python ah.py pool-init --create
+```
 
-If you would rather not hand out access, `python ah.py publish` writes the same
-packed scan into a git repo instead; set `repo_dir` in `config.json` to a clone.
+That creates the project, applies `schema.sql`, reads back the project's
+*publishable* key, stores it in `config.json`, proves the pool answers, and
+prints an invite line to send round.
+
+**Everyone else, once:**
+
+```
+python ah.py pool-join <the invite line you were sent>
+```
+
+**Everyone, from then on:** leave `watch.cmd` running (or `./watch.sh`, or
+`python ah.py watch`). It notices the moment WoW rewrites its SavedVariables
+-- which is the moment you `/reload` after a scan -- archives the scan, and
+uploads it. Nothing to remember after a session.
+
+For a machine you would rather not leave a window open on, `python ah.py
+watch --once` checks and exits, so Task Scheduler or cron can run it every
+few minutes.
+
+Then `python ah.py ui` opens the terminal with the pool behind it: everyone's
+scans in the list, and price history that reaches past the 21 days
+Auctionator itself keeps.
+
+### Who can do what
+
+Everyone shares the project's publishable key, the kind Supabase means to be
+embedded in client code. What actually holds is the row-level security in
+`schema.sql`:
+
+- anyone with the key can **read** every scan and every price,
+- anyone with the key can **append** a scan,
+- **nobody** can update or delete anything, through that key.
+
+So the worst a leaked invite costs you is a junk scan in the list, never
+somebody's history. Writes to the price table go through one function that
+keeps the lowest price seen for each item and day, which is the same rule
+Auctionator applies to its own records, so two people scanning the same realm
+refine each other's data instead of fighting over it.
+
+Treat the project as holding auction prices and nothing else: the invite is a
+read-and-append credential for whoever has it.
+
+### The hosted page and the local page
+
+The artifact at the link above is the no-install view: it opens on a baseline
+scan, reads files you drop on it, and pools through its own store for people
+who can open the page. It cannot reach Supabase -- a hosted artifact may only
+talk to its own origin -- so it does not try.
+
+`python ah.py ui` serves the same file from your own machine, where it reads
+the Supabase pool directly. Same six screens, same keys.
+
+### What it costs
+
+Nothing, on the free tier, for a group this size. A packed scan is about
+300 KB in storage, and the price table grows by day rather than by scan: one
+row per item per day, however many of you upload. At 4,500 items that is a
+couple of MB a day against a 500 MB database and 1 GB of storage.
 
 ## Files
 
@@ -85,9 +147,15 @@ packed scan into a git repo instead; set `repo_dir` in `config.json` to a clone.
 | `luasv.py` | parser for WoW SavedVariables (a restricted Lua subset) |
 | `cbor.py` | CBOR decoder (RFC 8949) for the packed price database |
 | `pack.py` | columnar packing for the web UI and the shared store |
+| `pool.py` | Supabase REST and Storage client, standard library only |
+| `poolcli.py` | the pool commands, and the Supabase CLI provisioning |
+| `schema.sql` | the pool's tables, policies and buckets |
+| `watch.cmd`, `watch.sh` | double-click uploader for everyone else |
+| `tests/` | the pool tested against a stand-in Supabase |
 | `web/terminal.html` | the terminal UI source |
 | `addon/` | the AHEcon companion addon |
-| `config.json` | WoW path, flavor, account, realm, uploader name (not in git) |
+| `config.json` | WoW path, flavor, realm, uploader, pool address (not in git) |
+| `web/pool.js` | the pool address the local page reads (not in git) |
 | `data/snapshots/*.json` | one archived scan each, lossless |
 | `data/series.jsonl` | flat (time, item, price, qty) rows for trend work |
 

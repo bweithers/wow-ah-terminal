@@ -6,3 +6,6 @@ data/*.csv
 web/scan.json
 # the addon's generated id list is rebuilt by `ah.py sync-ids`
 addon/ItemIDs.lua
+
+# the pool address this machine uses (written by ah.py)
+web/pool.js

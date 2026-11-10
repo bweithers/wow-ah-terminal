@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Azeroth Auction Terminal</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -232,6 +233,10 @@ td.muted { color: var(--mute); }
   </div>
 </div>
 
+<!-- Where the shared pool lives. Written by `ah.py pool-init` (owner) or
+     `ah.py pool-join` (everyone else), and simply absent when the page is
+     opened as a hosted artifact, which cannot reach other origins anyway. -->
+<script src="pool.js" onerror="window.POOL = null"></script>
 <script>
 "use strict";
 /* ------------------------------------------------------------------ *
@@ -240,6 +245,7 @@ td.muted { color: var(--mute); }
 const DAY0 = Date.UTC(2020, 0, 1);
 const dayToDate = d => new Date(DAY0 + d * 86400000);
 const fmtDay = d => dayToDate(d).toISOString().slice(5, 10);
+const isoToDay = iso => Math.round((Date.parse(iso + "T00:00:00Z") - DAY0) / 86400000);
 
 function gold(c) {
   if (c == null || !isFinite(c)) return "--";
@@ -550,6 +556,9 @@ const S = {
   watch: new Set(),
   pool: "local",
   db: null, user: null, canWrite: false,
+  sb: null,           // Supabase pool client, once it answers
+  poolScans: [],      // the pool's index, not yet downloaded
+  longHist: new Map(),// item id -> pooled history beyond Auctionator's window
 };
 
 try {
@@ -880,9 +889,11 @@ function select(id) {
       `<div class="kv"><span>${p.t ? new Date(p.t * 1000).toISOString().slice(5, 16).replace("T", " ") : "--"}
         \u00d7${p.qty || 1}</span><b>${gold(p.price)}</b></div>`).join("");
   }
+  html += `<div id="longhist"></div>`;
   html += `<div class="dk-h">Watchlist</div>
     <div class="hint">Press <kbd>W</kbd> to ${S.watch.has(it.id) ? "remove" : "add"} this item.</div>`;
   el("dockbody").innerHTML = html;
+  if (S.sb) loadLongHistory(it.id);
 }
 
 function bigChart(hist) {
@@ -941,24 +952,13 @@ function renderLoad() {
           <th>Uploader</th><th>Realm</th><th>Scan</th><th>Items</th><th>Role</th>
         </tr></thead><tbody>${rows}</tbody></table>`
         : `<div class="empty">No scans loaded.</div>`}
-      <div class="dk-h">Shared pool <span class="pill ${S.canWrite ? "ok" : "no"}">${S.canWrite ? "can publish" : "read only"}</span></div>
-      <div class="hint" id="poolnote"></div>
+      <div class="dk-h">Shared pool <span class="pill ${S.canWrite ? "ok" : "no"}">${S.sb ? "connected" : S.canWrite ? "can publish" : "read only"}</span></div>
+      <div id="poolnote"></div>
       <div class="dk-h">Log</div>
       <div id="log"></div>
     </div>`;
 
-  el("poolnote").innerHTML = S.db
-    ? (S.canWrite
-      ? `Scans you load here can be published to the shared pool so everyone with
-         access to this page sees them. <button type="button" id="pub"
-         style="background:var(--amber);color:#15100a;border:0;padding:5px 10px;
-         font:600 11px var(--mono);cursor:pointer;margin-left:6px">Publish current scan</button>`
-      : `You can read the shared pool but not write to it. Publishing needs
-         Contributor access to this page.`)
-    : `The shared pool is not available in this view, so scans you load stay on
-       this device. Everything else works.`;
-  const pub = el("pub");
-  if (pub) pub.onclick = publishCurrent;
+  paintPoolNote();
 
   const drop = el("drop"), file = el("file");
   el("pick").onclick = () => file.click();
@@ -973,6 +973,55 @@ function renderLoad() {
     if (e.dataTransfer.files.length) readFiles(e.dataTransfer.files);
   });
   flushLog();
+}
+
+const PUB_BTN = `background:var(--amber);color:#15100a;border:0;padding:5px 10px;
+  font:600 11px var(--mono);cursor:pointer`;
+
+function paintPoolNote() {
+  const host = el("poolnote");
+  if (!host) return;
+
+  if (S.sb) {
+    const rows = S.poolScans.map(r => {
+      const here = S.scans.some(x => x.scan === r.scanned_at && x.uploader === r.uploader);
+      return `<tr><td class="name">${esc(r.uploader)}</td>
+        <td>${esc(r.realm)}</td>
+        <td>${esc(String(r.scanned_at).slice(0, 16).replace("T", " "))}</td>
+        <td class="num">${(r.items || 0).toLocaleString()}</td>
+        <td>${here ? '<span class="muted">loaded</span>'
+          : `<button type="button" class="poolget" data-path="${esc(r.object_path)}"
+               style="${PUB_BTN};padding:2px 8px">load</button>`}</td></tr>`;
+    }).join("");
+    host.innerHTML = `
+      <div class="hint">Connected to <code>${esc(S.sb.host)}</code>. Everyone
+        with the invite reads the same pool, and nothing in it can be
+        overwritten or deleted.</div>
+      ${S.poolScans.length ? `<table><thead><tr>
+          <th>Who</th><th>Realm</th><th>Scanned</th><th>Items</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table>`
+        : `<div class="empty">The pool is empty. Publish the first scan.</div>`}
+      <div class="hint" style="margin-top:8px">
+        <button type="button" id="pub" style="${PUB_BTN}">Publish current scan</button>
+        &nbsp;or let <code>python ah.py watch</code> do it after every scan.</div>`;
+    host.querySelectorAll(".poolget").forEach(b => {
+      b.onclick = () => loadPoolScan(b.dataset.path);
+    });
+  } else if (S.db) {
+    host.innerHTML = S.canWrite
+      ? `<div class="hint">Scans you load here can be published to this page's
+         own store, so everyone who can open the page sees them.
+         <button type="button" id="pub" style="${PUB_BTN};margin-left:6px">Publish current scan</button></div>`
+      : `<div class="hint">You can read this page's shared store but not write
+         to it. Publishing needs Contributor access to the page.</div>`;
+  } else {
+    host.innerHTML = `<div class="hint">No shared pool in this view, so scans
+      you load stay on this device &mdash; everything else works. To pool scans
+      with friends, run <code>python ah.py pool-join &lt;invite&gt;</code> and
+      open the terminal with <code>python ah.py ui</code>.</div>`;
+  }
+  const pub = el("pub");
+  if (pub) pub.onclick = publishCurrent;
 }
 
 const LOG = [];
@@ -1089,6 +1138,7 @@ function paintRail() {
  * Shared pool
  * ------------------------------------------------------------------ */
 async function publishCurrent() {
+  if (S.sb) return publishToSupabase();
   if (!S.db || !S.cur) return;
   const pk = S.cur.pk;
   const id = `${(pk.realm || "x").replace(/[^A-Za-z0-9_.~:@+-]/g, "_")}_${(pk.uploader || "me").replace(/[^A-Za-z0-9_.~:@+-]/g, "_")}_${String(pk.scan).replace(/[^0-9]/g, "").slice(0, 14)}`;
@@ -1170,7 +1220,212 @@ function mergeParts(parts) {
   return out;
 }
 
+/* The Supabase pool. Reached over plain REST with the project's publishable
+   key, which is meant to live in client code; what protects the pool is its
+   row-level security -- read everything, append a scan, change nothing.
+
+   A hosted artifact is sandboxed to its own origin, so these calls simply
+   fail there and the page falls back to the artifact's own store. Anywhere
+   else -- served from a folder by `ah.py ui`, or from Supabase itself -- they
+   work. */
+const SB = (() => {
+  const c = (typeof window !== "undefined" && window.POOL) || null;
+  if (!c || !c.url || !c.key) return null;
+  const base = String(c.url).replace(/\/+$/, "");
+  const head = { apikey: c.key, Authorization: "Bearer " + c.key };
+  async function req(path, opts = {}) {
+    const r = await fetch(base + path, {
+      ...opts, headers: { ...head, ...(opts.headers || {}) },
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      let msg = body.slice(0, 200);
+      try { msg = JSON.parse(body).message || msg; } catch (e) { /* plain text */ }
+      const err = new Error(`HTTP ${r.status}: ${msg}`);
+      err.status = r.status;
+      throw err;
+    }
+    return r;
+  }
+  const bucket = c.bucket || "scans";
+  return {
+    host: base.replace(/^https?:\/\//, ""),
+    bucket,
+    scans: async (limit = 30) =>
+      (await req(`/rest/v1/scans?select=*&order=scanned_at.desc&limit=${limit}`)).json(),
+    realms: async () =>
+      (await req(`/rest/v1/pool_realms?select=*&order=latest.desc`)).json(),
+    object: async (path) =>
+      (await req(`/storage/v1/object/${bucket}/${path}`)).json(),
+    putObject: async (path, body) =>
+      req(`/storage/v1/object/${bucket}/${path}`, {
+        method: "POST", body,
+        headers: { "Content-Type": "application/json" },
+      }),
+    addScan: async (row) =>
+      req(`/rest/v1/scans`, {
+        method: "POST", body: JSON.stringify([row]),
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+      }),
+    ingest: async (rows) =>
+      req(`/rest/v1/rpc/ingest_prices`, {
+        method: "POST", body: JSON.stringify({ payload: rows }),
+        headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+      }),
+    history: async (realm, ids) =>
+      (await req(`/rest/v1/prices?select=item,day,price,qty,min_seen`
+        + `&realm=eq.${encodeURIComponent(realm)}`
+        + `&item=in.(${ids.map(Number).join(",")})`
+        + `&order=day.asc&limit=4000`)).json(),
+  };
+})();
+
+/* Same keys the Python side writes, so a scan pushed from either place is
+   indistinguishable in the pool. */
+function poolSlug(v) {
+  return (String(v == null ? "" : v).replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "").slice(0, 48)) || "unknown";
+}
+function poolScanId(realm, uploader, scan) {
+  return `${poolSlug(realm)}_${poolSlug(uploader)}_`
+    + String(scan).replace(/[^0-9]/g, "").slice(0, 14);
+}
+function poolObjectPath(realm, uploader, scan) {
+  return `${poolSlug(realm)}/${poolSlug(uploader)}/`
+    + poolScanId(realm, uploader, scan) + ".json";
+}
+function poolPriceRows(pk, days = 3) {
+  const out = [];
+  const hist = pk.hist || {};
+  let nums = Object.keys(hist).map(Number).filter(x => !isNaN(x)).sort((a, b) => a - b);
+  if (days != null) nums = nums.slice(-days);
+  for (const dn of nums) {
+    const date = new Date(Date.UTC(2020, 0, 1 + dn)).toISOString().slice(0, 10);
+    for (const [idx, price] of hist[String(dn)] || []) {
+      const id = pk.id[idx];
+      if (typeof id !== "number") continue;
+      out.push({
+        realm: pk.realm, item: id, day: date, price,
+        qty: pk.q ? pk.q[idx] : null,
+        min_seen: pk.ms ? pk.ms[idx] : null,
+      });
+    }
+  }
+  return out;
+}
+
+/* Load the pool's index, then the newest couple of payloads. Returns true if
+   the pool answered at all, which is what decides whether the artifact store
+   is used as a fallback. */
+async function connectSupabase() {
+  if (!SB) return false;
+  try {
+    S.poolScans = await SB.scans(30);
+  } catch (e) {
+    log(`shared pool at ${SB.host} is out of reach from this page `
+      + `(${e.status ? "HTTP " + e.status : "blocked"}).`);
+    return false;
+  }
+  S.sb = SB;
+  S.pool = "pooled";
+  S.canWrite = true;
+  log(`pool ${SB.host}: ${S.poolScans.length} scan(s) indexed.`);
+  const fresh = S.poolScans
+    .filter(r => !S.scans.some(x => x.scan === r.scanned_at && x.uploader === r.uploader))
+    .slice(0, 2);
+  for (const r of fresh) {
+    try {
+      addScan(await SB.object(r.object_path));
+      log(`loaded ${r.uploader} / ${r.realm} / ${r.items.toLocaleString()} items.`);
+    } catch (e) {
+      log(`could not load ${r.object_path}: ${e.message}`);
+    }
+  }
+  if (S.cur) paintRail();
+  return true;
+}
+
+async function loadPoolScan(path) {
+  if (!S.sb) return;
+  log("downloading " + path + " …");
+  try {
+    addScan(await S.sb.object(path));
+    log("loaded.");
+    if (S.screen === "load") renderLoad();
+  } catch (e) {
+    log("download failed: " + e.message);
+  }
+}
+
+async function publishToSupabase() {
+  const pk = S.cur && S.cur.pk;
+  if (!S.sb || !pk) return;
+  const path = poolObjectPath(pk.realm, pk.uploader, pk.scan);
+  const body = JSON.stringify(pk);
+  log(`publishing ${(body.length / 1024).toFixed(0)} KB to the pool …`);
+  try {
+    try {
+      await S.sb.putObject(path, body);
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      log("that payload was already in the pool.");
+    }
+    try {
+      await S.sb.addScan({
+        id: poolScanId(pk.realm, pk.uploader, pk.scan),
+        realm: pk.realm, uploader: String(pk.uploader || "web").slice(0, 48),
+        scanned_at: pk.scan, items: pk.n, schema: pk.schema || 1,
+        bytes: body.length, object_path: path,
+      });
+    } catch (e) {
+      if (e.status !== 409) throw e;
+    }
+    const rows = poolPriceRows(pk, 3);
+    for (let i = 0; i < rows.length; i += 4000) {
+      await S.sb.ingest(rows.slice(i, i + 4000));
+    }
+    log(`published: ${pk.n.toLocaleString()} items, ${rows.length.toLocaleString()} price rows.`);
+    S.poolScans = await S.sb.scans(30);
+    if (S.screen === "load") renderLoad();
+  } catch (e) {
+    log("publish failed: " + e.message);
+  }
+}
+
+/* Pooled history reaches past the 21 days Auctionator keeps, so the dock asks
+   for it once per item and remembers the answer. */
+async function loadLongHistory(id) {
+  if (!S.sb || !S.cur) return;
+  const realm = S.cur.pk.realm;
+  const key = realm + "/" + id;
+  if (S.longHist.has(key)) return paintLongHistory(id, S.longHist.get(key));
+  S.longHist.set(key, null);
+  try {
+    const rows = await S.sb.history(realm, [id]);
+    const series = rows.map(r => [r.day, r.price]).filter(r => r[1] != null);
+    S.longHist.set(key, series);
+    paintLongHistory(id, series);
+  } catch (e) {
+    S.longHist.set(key, []);
+  }
+}
+
+function paintLongHistory(id, series) {
+  if (!series || series.length < 2 || S.sel !== id) return;
+  const host = el("longhist");
+  if (!host) return;
+  const lo = Math.min(...series.map(r => r[1]));
+  const hi = Math.max(...series.map(r => r[1]));
+  host.innerHTML = `<div class="dk-h">Pooled history `
+    + `<span class="muted">${series.length} days</span></div>`
+    + `<div class="hint">${series[0][0]} to ${series[series.length - 1][0]}, `
+    + `low ${gold(lo)}, high ${gold(hi)}.</div>`
+    // bigChart labels its ends with fmtDay, so give it real day numbers
+    + bigChart(series.map(r => [isoToDay(r[0]), r[1]]));
+}
+
 async function connectPool() {
+  if (S.sb) return;              // the shared pool is already answering
   let db = null, user = null;
   try { db = await claude.use("db"); } catch (e) { db = null; }
   try { user = await claude.use("user"); } catch (e) { user = null; }
@@ -1260,6 +1515,8 @@ buildKeys();
       Press <kbd>6</kbd> and drop your <code>Auctionator.lua</code> to load one.</div>`;
     log("no baseline scan.json alongside the page.");
   }
-  connectPool();
+  // The shared pool first; the artifact's own store only if it is unreachable.
+  if (!(await connectSupabase())) await connectPool();
+  if (S.screen === "load") renderLoad();
 })();
 </script>

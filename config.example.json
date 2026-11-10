@@ -4,5 +4,9 @@
   "account": null,
   "realm": null,
   "uploader": "yourname",
-  "repo_dir": null
+  "repo_dir": null,
+
+  "supabase_url": null,
+  "supabase_key": null,
+  "supabase_bucket": "scans"
 }

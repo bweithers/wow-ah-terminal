@@ -9,3 +9,5 @@ addon/ItemIDs.lua
 
 # the pool address this machine uses (written by ah.py)
 web/pool.js
+
+data/watch-state.json

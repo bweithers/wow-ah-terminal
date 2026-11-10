@@ -426,6 +426,36 @@ def _stamp() -> str:
     return dt.datetime.now().strftime("%H:%M:%S")
 
 
+def _state_path(ah) -> str:
+    return os.path.join(ah.DATA, "watch-state.json")
+
+
+def load_watch_state(ah) -> dict:
+    """What the watcher last saw, so `--once` is incremental across runs.
+
+    Without this, a scheduled `watch --once` would repack and re-upload the
+    same scan every few minutes. The pool would absorb it -- a repeat is a
+    no-op there -- but it is pure waste.
+    """
+    try:
+        with open(_state_path(ah), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return {"sig": tuple(d["sig"]) if d.get("sig") else None,
+                "first": bool(d.get("first", True))}
+    except (OSError, ValueError, KeyError):
+        return {"sig": None, "first": True}
+
+
+def save_watch_state(ah, state: dict) -> None:
+    try:
+        os.makedirs(ah.DATA, exist_ok=True)
+        with open(_state_path(ah), "w", encoding="utf-8") as fh:
+            json.dump({"sig": list(state["sig"]) if state.get("sig") else None,
+                       "first": state.get("first", False)}, fh)
+    except OSError:
+        pass            # a watcher that cannot save state still works
+
+
 def _one_pass(ah, cfg, args, p, *, state: dict) -> bool:
     """Snapshot and push if the SavedVariables file has moved on. True if sent."""
     path = ah.sv_file(cfg, "Auctionator.lua")
@@ -464,6 +494,7 @@ def _one_pass(ah, cfg, args, p, *, state: dict) -> bool:
     except SystemExit as e:
         print(f"  skipped: {e}")
     state["sig"] = sig
+    save_watch_state(ah, state)
     return True
 
 
@@ -471,10 +502,11 @@ def cmd_watch(ah, cfg, args):
     p = pool.from_config(cfg)
     p.ping()
     path = ah.sv_file(cfg, "Auctionator.lua")
-    state = {"sig": None, "first": True}
+    state = load_watch_state(ah)
 
     if args.once:
-        _one_pass(ah, cfg, args, p, state=state)
+        if not _one_pass(ah, cfg, args, p, state=state):
+            print(f"[{_stamp()}] nothing new since the last check.")
         return
 
     print(f"Watching for new scans every {args.interval}s. Ctrl-C to stop.")
@@ -483,9 +515,8 @@ def cmd_watch(ah, cfg, args):
     print("Scan the AH in game, then /reload -- that is when WoW writes the "
           "file, and\nthis will pick it up within a few seconds.\n")
     if path:
-        # don't re-upload whatever was already on disk when the watcher started
-        # unless it is genuinely new to the pool; push_packed is idempotent, so
-        # take one pass now to get the current scan in.
+        # one pass now, so a scan made before the watcher started still goes
+        # in; the saved signature keeps this from repeating needlessly.
         _one_pass(ah, cfg, args, p, state=state)
     try:
         while True:

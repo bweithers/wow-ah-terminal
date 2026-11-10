@@ -52,10 +52,10 @@ Useful flags: `--top 30`, `--min-move 5`, `--discount 15`, `--ah-cut 5`,
 
 ## The terminal UI
 
-Screens are `F1`–`F6` (or `1`–`6`): Market, Movers, Arbitrage, Vendor Flips,
+Screens are the number keys `1`–`6` (browsers swallow the F-keys): Market, Movers, Arbitrage, Vendor Flips,
 Depth, Load. `/` searches, `j`/`k` or arrows move, `W` watchlists an item.
 
-The page carries a baseline scan, so it opens with real data. `F6` loads more:
+The page carries a baseline scan, so it opens with real data. Key `6` loads more:
 drop `Auctionator.lua` on it and the Lua tables and the CBOR-packed price
 database are decoded **in the browser** — no install, nothing uploaded. Drop
 `AHEcon.lua` alongside and items get names and vendor sell prices instead of

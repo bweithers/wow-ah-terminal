@@ -244,6 +244,7 @@ const fmtDay = d => dayToDate(d).toISOString().slice(5, 10);
 function gold(c) {
   if (c == null || !isFinite(c)) return "--";
   const neg = c < 0 ? "-" : "";
+  if (Math.abs(c) > 0 && Math.abs(c) < 1) return neg + "<1c";
   c = Math.round(Math.abs(c));
   const g = Math.floor(c / 10000), s = Math.floor((c % 10000) / 100), k = c % 100;
   if (g) return `${neg}${g.toLocaleString()}g${String(s).padStart(2, "0")}`;
@@ -604,19 +605,18 @@ function expand(pk) {
 const money = (it, k) => gold(it[k]);
 const SCREENS = {
   market: {
-    label: "Market", fk: "F1",
+    label: "Market", fk: "1",
     cols: [
       { k: "name", h: "Instrument", f: it => nameCell(it) },
       { k: "price", h: "Last", f: it => gold(it.price), cls: "num" },
       { k: "qty", h: "Qty", f: it => num(it.qty) },
       { k: "value", h: "Listed Value", f: it => gold(it.value), cls: "num" },
       { k: "spark", h: "History", f: it => spark(it), sortable: false },
-      { k: "minSeen", h: "Min Seen", f: it => gold(it.minSeen), cls: "muted" },
     ],
     sort: "value",
   },
   movers: {
-    label: "Movers", fk: "F2",
+    label: "Movers", fk: "2",
     cols: [
       { k: "name", h: "Instrument", f: it => nameCell(it) },
       { k: "wasPrice", h: "Prev", f: it => gold(it.wasPrice), cls: "muted" },
@@ -632,7 +632,7 @@ const SCREENS = {
       : "Only one scan loaded. Load a second scan, or scan again tomorrow, to see movement.",
   },
   arb: {
-    label: "Arbitrage", fk: "F3",
+    label: "Arbitrage", fk: "3",
     cols: [
       { k: "name", h: "Instrument", f: it => nameCell(it) },
       { k: "price", h: "AH", f: it => gold(it.price), cls: "num" },
@@ -647,7 +647,7 @@ const SCREENS = {
       "Vendor prices come from the AHEcon addon reading the game's own item data.",
   },
   flips: {
-    label: "Vendor Flips", fk: "F4",
+    label: "Vendor Flips", fk: "4",
     cols: [
       { k: "name", h: "Instrument", f: it => nameCell(it) },
       { k: "vbuy", h: "Vendor Cost", f: it => gold(it.vbuy) },
@@ -657,12 +657,14 @@ const SCREENS = {
       { k: "qty", h: "Listed", f: it => num(it.qty) },
     ],
     sort: "flipNet",
-    rows: () => S.items.filter(it => it.flipNet > 0 && it.flipMult >= 1.15),
+    // 10c floor: a sub-copper margin on arrows is not a trade once the
+    // auction cut and the deposit are paid.
+    rows: () => S.items.filter(it => it.flipNet >= 10 && it.flipMult >= 1.15),
     note: () => "Vendors restock forever, so the limit is demand -- 'listed' is how " +
-      "many are already up. Net of a 5% auction cut.",
+      "many are already up. Net of a 5% auction cut, margins under 10c dropped.",
   },
   depth: {
-    label: "Depth", fk: "F5",
+    label: "Depth", fk: "5",
     cols: [
       { k: "name", h: "Instrument", f: it => nameCell(it) },
       { k: "price", h: "Best", f: it => gold(it.price), cls: "num" },
@@ -680,7 +682,7 @@ const SCREENS = {
         : "No order-book depth in this scan. Depth is recorded per item as auction results come past while the AH is open, so it fills in as you browse and scan.";
     },
   },
-  load: { label: "Load Scans", fk: "F6", custom: true },
+  load: { label: "Load Scans", fk: "6", custom: true },
 };
 
 function nameCell(it) {
@@ -694,8 +696,12 @@ const esc = s => String(s).replace(/[&<>"]/g, c =>
 
 function spark(it) {
   const h = it.hist;
-  if (!h || h.length < 2) {
-    return `<svg width="68" height="14" aria-hidden="true"></svg>`;
+  if (!h || !h.length) return `<span class="muted">--</span>`;
+  if (h.length < 2) {
+    // one observation so far: show that, rather than an empty cell
+    return `<svg width="68" height="14" viewBox="0 0 68 14" aria-label="one observation">
+      <line x1="1" y1="7" x2="67" y2="7" stroke="#223040" stroke-width="1"/>
+      <circle cx="34" cy="7" r="2" fill="var(--amber-dim)"/></svg>`;
   }
   const ps = h.map(x => x[1]);
   const lo = Math.min(...ps), hi = Math.max(...ps), rng = hi - lo || 1;
@@ -1251,7 +1257,7 @@ buildKeys();
   } catch (e) {
     el("grid").innerHTML = `<div class="empty">
       No baseline scan published with this page.<br>
-      Press <kbd>F6</kbd> and drop your <code>Auctionator.lua</code> to load one.</div>`;
+      Press <kbd>6</kbd> and drop your <code>Auctionator.lua</code> to load one.</div>`;
     log("no baseline scan.json alongside the page.");
   }
   connectPool();

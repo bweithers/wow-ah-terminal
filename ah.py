@@ -779,51 +779,11 @@ def cmd_export(cfg, args):
     print(f"Wrote {out}")
 
 
-def build_digest(snap: dict, realm: str, uploader: str | None = None) -> dict:
-    """Compact, web-friendly view of one scan."""
-    items = snap["realms"][realm]
-    meta = {int(k): v for k, v in (snap.get("items") or {}).items()
-            if str(k).isdigit()}
-    depth = {int(k): v for k, v in (snap.get("depth") or {}).items()
-             if str(k).isdigit()}
-    vendor = snap.get("vendor") or {}
-    rows = []
-    for iid, rec in items.items():
-        it = normalize(iid, rec, {i: r.get("n") for i, r in meta.items()})
-        if it["price"] is None:
-            continue
-        m = meta.get(int(iid)) if str(iid).isdigit() else None
-        hist = [[d, p] for d, p in it["history"]]
-        lad = (depth.get(int(iid)) or {}).get("ladder") if str(iid).isdigit() else None
-        rows.append({
-            "id": int(iid) if str(iid).isdigit() else iid,
-            "n": it["name"],
-            "p": it["price"],
-            "q": it["qty"],
-            "m": it["min_seen"],
-            "h": hist,
-            "s": (m or {}).get("s"),
-            "st": (m or {}).get("st"),
-            "ql": (m or {}).get("q"),
-            "il": (m or {}).get("il"),
-            "vb": vendor.get(str(iid)),
-            "ld": lad or None,
-        })
-    rows.sort(key=lambda r: -(r["p"] * (r["q"] or 0)))
-    return {
-        "realm": realm,
-        "scan": snap["source_mtime"],
-        "captured": snap.get("captured"),
-        "uploader": uploader or "me",
-        "count": len(rows),
-        "items": rows,
-        "postings": snap.get("postings") or [],
-    }
-
-
 def cmd_publish(cfg, args):
     """Write the latest scan into the shared repo and push it."""
     import subprocess
+
+    import pack
 
     repo = cfg.get("repo_dir")
     if not repo or not os.path.isdir(os.path.join(repo, ".git")):
@@ -837,7 +797,10 @@ def cmd_publish(cfg, args):
     cur = snaps[-1]
     realm, _ = pick_realm(cur, cfg, args)
     who = cfg.get("uploader") or os.environ.get("USERNAME") or "me"
-    digest = build_digest(cur, realm, who)
+    # the same columnar format the web terminal reads, so a published file
+    # can be dropped straight onto the page
+    digest = pack.pack(cur, realm, who)
+    digest["count"] = digest["n"]
 
     stamp = cur["source_mtime"].replace(":", "").replace("-", "")[:15]
     rel = os.path.join("data", realm.replace(" ", "_"), f"{who}-{stamp}.json")

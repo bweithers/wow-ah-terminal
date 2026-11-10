@@ -1,0 +1,54 @@
+name: Pages
+
+# Publishes the terminal to GitHub Pages. The site is public, so it ships no
+# pool address and no scan data: the page asks each viewer for the invite
+# once and keeps it in their own browser.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/terminal.html"
+      - "web/pool.stub.js"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          set -eu
+          mkdir -p site
+          cp web/terminal.html site/index.html
+          # the keyless stub, so the public page carries no pool address
+          cp web/pool.stub.js site/pool.js
+          # fail loudly rather than publish a key by accident
+          if grep -rEq 'sb_publishable_[A-Za-z0-9_-]{8,}|sb_secret_|supabase\.co' site; then
+            echo "refusing to publish: a pool address or key reached the site"
+            grep -rnE 'sb_publishable_[A-Za-z0-9_-]{8,}|sb_secret_|supabase\.co' site || true
+            exit 1
+          fi
+          ls -l site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

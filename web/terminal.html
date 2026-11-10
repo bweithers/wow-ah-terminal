@@ -1633,8 +1633,9 @@ buildKeys();
     } else throw new Error("HTTP " + r.status);
   } catch (e) {
     el("grid").innerHTML = `<div class="empty">
-      No baseline scan published with this page.<br>
-      Press <kbd>6</kbd> and drop your <code>Auctionator.lua</code> to load one.</div>`;
+      No scan loaded yet.<br>
+      Press <kbd>6</kbd> to paste your pool invite, or drop an
+      <code>Auctionator.lua</code> on it.</div>`;
     log("no baseline scan.json alongside the page.");
   }
   // The shared pool first; the artifact's own store only if it is unreachable.

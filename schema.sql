@@ -158,18 +158,15 @@ grant execute on function public.ingest_prices(jsonb) to anon, authenticated;
 
 -- -------------------------------------------------------------------- storage
 -- `scans` holds the packed scan payloads: readable and appendable with the
--- key, capped per object. `web` is public and holds the terminal page itself,
--- uploaded by the owner through the CLI.
+-- key, capped per object. There is no bucket for the page itself: Storage
+-- serves anything HTML-ish as text/plain whatever content type is set, so a
+-- browser would download the terminal rather than run it.
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('scans', 'scans', false, 33554432, array['application/json'])
 on conflict (id) do update
   set file_size_limit = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
-
-insert into storage.buckets (id, name, public)
-values ('web', 'web', true)
-on conflict (id) do update set public = true;
 
 drop policy if exists "pool reads objects"   on storage.objects;
 drop policy if exists "pool appends objects" on storage.objects;

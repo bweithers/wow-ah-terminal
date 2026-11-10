@@ -904,6 +904,7 @@ def main(argv=None):
     common.add_argument("--org-id", help="pool-init: Supabase organization")
     common.add_argument("--name", help="pool-init: project name")
     common.add_argument("--region", help="pool-init: project region")
+    common.add_argument("--size", help="pool-init: instance size (paid plans only)")
     common.add_argument("--create", action="store_true",
                         help="pool-init: create the project if it is missing")
     common.add_argument("--url", help="pool-join: https://<ref>.supabase.co")

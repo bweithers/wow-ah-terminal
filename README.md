@@ -122,15 +122,32 @@ refine each other's data instead of fighting over it.
 Treat the project as holding auction prices and nothing else: the invite is a
 read-and-append credential for whoever has it.
 
-### The hosted page and the local page
+### Three ways to open the terminal
 
-The artifact at the link above is the no-install view: it opens on a baseline
-scan, reads files you drop on it, and pools through its own store for people
-who can open the page. It cannot reach Supabase -- a hosted artifact may only
-talk to its own origin -- so it does not try.
+| where | pool | key |
+| --- | --- | --- |
+| the artifact link above | the page's own store | none needed |
+| `python ah.py ui` | Supabase | read from `web/pool.js` |
+| a public copy, e.g. GitHub Pages | Supabase | pasted once, per browser |
+
+The artifact is the no-install view: it opens on a baseline scan, reads files
+you drop on it, and pools through its own store for people who can open the
+page. It cannot reach Supabase -- a hosted artifact may only talk to its own
+origin -- so it does not try.
 
 `python ah.py ui` serves the same file from your own machine, where it reads
-the Supabase pool directly. Same six screens, same keys.
+the Supabase pool directly.
+
+A copy served from a public URL **ships no key**. It asks for the invite once
+and keeps it in that browser's local storage, so the pool stays invite-gated
+even though the page is public. Pasting the whole `python ah.py pool-join …`
+line works, and so does a link ending `#invite=<token>` -- a fragment is
+never sent to the web server, so it reaches only the person who opens it. The
+Load screen has a **Forget pool** button to undo it.
+
+Supabase holds the data and nothing else. Its Storage serves anything
+HTML-ish as `text/plain` whatever content type is set, so the page cannot be
+hosted there; it would download instead of opening.
 
 ### What it costs
 

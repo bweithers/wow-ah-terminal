@@ -984,7 +984,8 @@ function paintPoolNote() {
 
   if (S.sb) {
     const rows = S.poolScans.map(r => {
-      const here = S.scans.some(x => x.scan === r.scanned_at && x.uploader === r.uploader);
+      const here = S.scans.some(x =>
+        scanKey(x.scan, x.uploader) === scanKey(r.scanned_at, r.uploader));
       return `<tr><td class="name">${esc(r.uploader)}</td>
         <td>${esc(r.realm)}</td>
         <td>${esc(String(r.scanned_at).slice(0, 16).replace("T", " "))}</td>
@@ -1003,7 +1004,10 @@ function paintPoolNote() {
         : `<div class="empty">The pool is empty. Publish the first scan.</div>`}
       <div class="hint" style="margin-top:8px">
         <button type="button" id="pub" style="${PUB_BTN}">Publish current scan</button>
-        &nbsp;or let <code>python ah.py watch</code> do it after every scan.</div>`;
+        &nbsp;or let <code>python ah.py watch</code> do it after every scan.
+        <button type="button" id="leave" style="${PUB_BTN};background:transparent;
+          color:var(--mute);border:1px solid var(--line);margin-left:8px">Forget pool</button>
+      </div>`;
     host.querySelectorAll(".poolget").forEach(b => {
       b.onclick = () => loadPoolScan(b.dataset.path);
     });
@@ -1015,13 +1019,32 @@ function paintPoolNote() {
       : `<div class="hint">You can read this page's shared store but not write
          to it. Publishing needs Contributor access to the page.</div>`;
   } else {
-    host.innerHTML = `<div class="hint">No shared pool in this view, so scans
-      you load stay on this device &mdash; everything else works. To pool scans
-      with friends, run <code>python ah.py pool-join &lt;invite&gt;</code> and
-      open the terminal with <code>python ah.py ui</code>.</div>`;
+    host.innerHTML = `
+      <div class="hint">Not connected to a pool, so scans you load stay on
+        this device &mdash; everything else works.</div>
+      <div class="hint" style="margin-top:8px">Paste the invite line you were
+        sent and it is kept in this browser only. This page carries no key of
+        its own.</div>
+      <div style="display:flex;gap:6px;margin-top:8px;max-width:560px">
+        <input id="invite" placeholder="python ah.py pool-join …"
+          autocomplete="off" spellcheck="false"
+          style="flex:1;min-width:0;background:var(--panel2);color:var(--text);
+          border:1px solid var(--line);padding:6px 8px;font:400 11px var(--mono)">
+        <button type="button" id="join" style="${PUB_BTN}">Connect</button>
+      </div>`;
+    const inv = el("invite"), join = el("join");
+    const go = async () => {
+      join.disabled = true;
+      await joinPool(inv.value);
+      if (el("join")) el("join").disabled = false;
+    };
+    join.onclick = go;
+    inv.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); go(); } };
   }
   const pub = el("pub");
   if (pub) pub.onclick = publishCurrent;
+  const leave = el("leave");
+  if (leave) leave.onclick = leavePool;
 }
 
 const LOG = [];
@@ -1103,7 +1126,8 @@ function uploaderName() {
 }
 
 function addScan(pk) {
-  S.scans = S.scans.filter(s => !(s.scan === pk.scan && s.uploader === pk.uploader));
+  S.scans = S.scans.filter(s =>
+    scanKey(s.scan, s.uploader) !== scanKey(pk.scan, pk.uploader));
   S.scans.push(pk);
   S.scans.sort((a, b) => String(b.scan).localeCompare(String(a.scan)));
   recompute();
@@ -1228,8 +1252,7 @@ function mergeParts(parts) {
    fail there and the page falls back to the artifact's own store. Anywhere
    else -- served from a folder by `ah.py ui`, or from Supabase itself -- they
    work. */
-const SB = (() => {
-  const c = (typeof window !== "undefined" && window.POOL) || null;
+function makeSB(c) {
   if (!c || !c.url || !c.key) return null;
   const base = String(c.url).replace(/\/+$/, "");
   const head = { apikey: c.key, Authorization: "Bearer " + c.key };
@@ -1278,10 +1301,108 @@ const SB = (() => {
         + `&item=in.(${ids.map(Number).join(",")})`
         + `&order=day.asc&limit=4000`)).json(),
   };
-})();
+}
+
+/* Where the pool's address comes from, in order of preference:
+
+     1. pool.js, which `ah.py pool-init` / `pool-join` writes next to this
+        file on your own machine;
+     2. an invite pasted into this page before now, kept in this browser and
+        nowhere else;
+     3. `#invite=...` on the link that opened the page.
+
+   A copy of this page served from a public URL -- GitHub Pages, say -- ships
+   no key at all and asks for the invite once. The fragment in (3) is never
+   sent to the web server by any browser, so a link carrying one reaches only
+   the person who opens it. */
+const POOL_STORE = "aat.pool";
+
+function readStoredPool() {
+  try {
+    const raw = localStorage.getItem(POOL_STORE);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function storePool(c) {
+  try { localStorage.setItem(POOL_STORE, JSON.stringify(c)); } catch (e) { /* private window */ }
+}
+function forgetPool() {
+  try { localStorage.removeItem(POOL_STORE); } catch (e) { /* nothing to forget */ }
+}
+
+/* Accepts the bare token or the whole `python ah.py pool-join <token>` line,
+   since that is what people will have in their clipboard. */
+function decodeInvite(token) {
+  let t = String(token || "").trim();
+  const said = t.lastIndexOf("pool-join");
+  if (said >= 0) t = t.slice(said + "pool-join".length).trim();
+  t = t.split(/\s+/)[0] || "";
+  if (!t) return null;
+  try {
+    const pad = "=".repeat((4 - (t.length % 4)) % 4);
+    const d = JSON.parse(atob(t.replace(/-/g, "+").replace(/_/g, "/") + pad));
+    if (!d.u || !d.k) return null;
+    return { url: String(d.u), key: String(d.k), bucket: d.b || "scans" };
+  } catch (e) { return null; }
+}
+
+function resolvePool() {
+  const m = /[#&]invite=([A-Za-z0-9_=-]+)/.exec(location.hash || "");
+  const fromLink = m ? decodeInvite(m[1]) : null;
+  if (fromLink) {
+    storePool(fromLink);
+    // keep it out of the address bar, where it would be copied on by accident
+    try {
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch (e) { /* the fragment just stays visible */ }
+    return fromLink;
+  }
+  if (window.POOL && window.POOL.url) return window.POOL;
+  return readStoredPool();
+}
+
+let SB = makeSB(resolvePool());
+
+/* Used by the Load screen when someone pastes an invite. */
+async function joinPool(token) {
+  const cfg = decodeInvite(token);
+  if (!cfg) {
+    log("that does not look like an invite -- paste the whole pool-join line.");
+    return false;
+  }
+  const probe = makeSB(cfg);
+  log(`connecting to ${cfg.url.replace(/^https?:\/\//, "")} …`);
+  try {
+    await probe.scans(1);
+  } catch (e) {
+    log("the pool would not answer: " + e.message);
+    return false;
+  }
+  storePool(cfg);
+  SB = probe;
+  await connectSupabase();
+  if (S.screen === "load") renderLoad();
+  return true;
+}
+
+function leavePool() {
+  forgetPool();
+  SB = null;
+  S.sb = null;
+  S.poolScans = [];
+  S.pool = "local";
+  S.longHist.clear();
+  log("pool forgotten on this device. Reload to start clean.");
+  if (S.cur) paintRail();
+  if (S.screen === "load") renderLoad();
+}
 
 /* Same keys the Python side writes, so a scan pushed from either place is
    indistinguishable in the pool. */
+function scanKey(scan, uploader) {
+  return String(scan == null ? "" : scan).slice(0, 19) + "|" + String(uploader || "");
+}
+
 function poolSlug(v) {
   return (String(v == null ? "" : v).replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "").slice(0, 48)) || "unknown";
@@ -1330,8 +1451,9 @@ async function connectSupabase() {
   S.pool = "pooled";
   S.canWrite = true;
   log(`pool ${SB.host}: ${S.poolScans.length} scan(s) indexed.`);
+  const have = new Set(S.scans.map(x => scanKey(x.scan, x.uploader)));
   const fresh = S.poolScans
-    .filter(r => !S.scans.some(x => x.scan === r.scanned_at && x.uploader === r.uploader))
+    .filter(r => !have.has(scanKey(r.scanned_at, r.uploader)))
     .slice(0, 2);
   for (const r of fresh) {
     try {

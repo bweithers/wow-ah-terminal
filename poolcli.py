@@ -14,6 +14,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 
 import pack
@@ -28,12 +29,31 @@ REGIONS = ("us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1",
 # driving the Supabase CLI
 # --------------------------------------------------------------------------- #
 
+def _which(name: str) -> str | None:
+    """Find a runnable program, not a shell script Windows cannot launch.
+
+    Under Git Bash, `shutil.which("npx")` happily returns Node's extensionless
+    POSIX wrapper, and CreateProcess then refuses it with "not a valid Win32
+    application". Ask for the Windows launchers by name first.
+    """
+    if sys.platform == "win32":
+        for ext in (".cmd", ".exe", ".bat"):
+            found = shutil.which(name + ext)
+            if found:
+                return found
+        found = shutil.which(name)
+        if found and os.path.splitext(found)[1].lower() in (".cmd", ".exe", ".bat"):
+            return found
+        return None
+    return shutil.which(name)
+
+
 def supabase_cmd() -> list[str]:
     """How to invoke the Supabase CLI here, preferring an installed binary."""
-    exe = shutil.which("supabase")
+    exe = _which("supabase")
     if exe:
         return [exe]
-    npx = shutil.which("npx")
+    npx = _which("npx")
     if npx:
         return [npx, "--yes", "supabase@latest"]
     raise SystemExit(
@@ -43,17 +63,59 @@ def supabase_cmd() -> list[str]:
     )
 
 
+# values that must never be echoed, whatever the CLI or an error does with them
+_REDACT: set[str] = set()
+
+
+def _safe(text: str) -> str:
+    for v in _REDACT:
+        if v:
+            text = text.replace(v, "<redacted>")
+    return text
+
+
+def _shown(args: list[str]) -> str:
+    """The command as it is safe to print, with secret flag values masked."""
+    out, mask = [], False
+    for a in args:
+        out.append("<redacted>" if mask else _safe(a))
+        mask = a in ("--db-password", "--password", "--token")
+    return " ".join(out)
+
+
+def _explain(out: str) -> str:
+    """The human sentence inside the CLI's error JSON, if that is what it is."""
+    try:
+        d = json.loads(out)
+    except (ValueError, TypeError):
+        return out
+    err = d.get("error") if isinstance(d, dict) else None
+    msg = (err or {}).get("message") if isinstance(err, dict) else None
+    if not msg:
+        return out
+    start = str(msg).find("{")      # the message often wraps the API's own JSON
+    if start >= 0:
+        try:
+            inner = json.loads(str(msg)[start:])
+            if isinstance(inner, dict) and inner.get("message"):
+                return str(inner["message"])
+        except ValueError:
+            pass
+    return str(msg)
+
+
 def sb(args: list[str], *, json_out: bool = False, check: bool = True,
-       quiet: bool = False, timeout: int = 300):
+       quiet: bool = False, timeout: int = 300, cwd: str | None = None):
     """Run a Supabase CLI subcommand. Returns parsed JSON or raw stdout."""
     cmd = supabase_cmd() + args
     if json_out:
         cmd += ["--output-format", "json"]
     if not quiet:
-        print(f"  $ supabase {' '.join(args)}")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    out = (r.stdout or "").strip()
-    err = (r.stderr or "").strip()
+        print(f"  $ supabase {_shown(args)}")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       cwd=cwd)
+    out = _safe((r.stdout or "").strip())
+    err = _safe((r.stderr or "").strip())
     if "AccessTokenRequiredError" in out + err:
         raise SystemExit(
             "Supabase needs you to log in first. Run this, approve it in the\n"
@@ -61,8 +123,10 @@ def sb(args: list[str], *, json_out: bool = False, check: bool = True,
             "    npx supabase login\n"
         )
     if check and r.returncode != 0:
-        detail = (err or out)[:800]
-        raise SystemExit(f"supabase {' '.join(args)} failed:\n{detail}")
+        # the CLI reports failures as JSON on stdout and prints its own
+        # confirmation chatter to stderr, so stdout is the interesting half
+        detail = "\n".join(x for x in (_explain(out), err) if x)[:800]
+        raise SystemExit(f"supabase {_shown(args)} failed:\n{detail}")
     if not json_out:
         return out
     if not out:
@@ -88,7 +152,8 @@ def _rows(payload):
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        for k in ("data", "result", "rows", "projects", "organizations"):
+        for k in ("data", "result", "rows", "projects", "organizations",
+                  "keys", "api_keys"):
             v = payload.get(k)
             if isinstance(v, list):
                 return v
@@ -200,10 +265,15 @@ def cmd_pool_init(ah, cfg, args):
         # to the project through your login instead. Reset it in the Supabase
         # dashboard if you ever want direct psql access.
         pw = secrets.token_urlsafe(24)
+        _REDACT.add(pw)
         print(f"\n  creating project {want} in {org} ({region}) ...")
-        sb(["projects", "create", want, "--org-id", str(org),
-            "--db-password", pw, "--region", region, "--size", "micro",
-            "--yes"], quiet=True)
+        create = ["projects", "create", want, "--org-id", str(org),
+                  "--db-password", pw, "--region", region, "--yes"]
+        # a free-plan organization refuses --size outright, so send it only
+        # when it was actually asked for
+        if getattr(args, "size", None):
+            create += ["--size", args.size]
+        sb(create, quiet=True)
         ref = None
         for _ in range(40):
             for p in _rows(sb(["projects", "list"], json_out=True, quiet=True)):
@@ -232,20 +302,38 @@ def cmd_pool_init(ah, cfg, args):
     # --- keys -------------------------------------------------------------
     keys = _rows(sb(["projects", "api-keys", f"--remote={ref}"],
                     json_out=True, quiet=True))
-    key = None
+    # The project ships four keys: a modern publishable/secret pair and the
+    # legacy anon/service_role JWTs. Only two of those are safe to hand out,
+    # and the dangerous ones are named "default" just like the safe one, so
+    # match on every field rather than on the name.
+    def _tag(k: dict) -> str:
+        return " ".join(str(_get(k, f, default=""))
+                        for f in ("type", "name", "id", "prefix")).lower()
+
     for k in keys:
-        tag = f"{_get(k, 'name', 'type', default='')}".lower()
-        val = _get(k, "api_key", "apiKey", "key", default="")
-        if not val or "secret" in tag or "service" in tag:
-            continue
-        if "publishable" in tag or "anon" in tag or val.startswith("sb_publishable_"):
-            key = val
+        val = str(_get(k, "api_key", "apiKey", "key", default=""))
+        if val and ("secret" in _tag(k) or "service" in _tag(k)
+                    or val.startswith("sb_secret_")):
+            _REDACT.add(val)        # never let this one reach the screen
+
+    key = None
+    for want in ("publishable", "anon"):      # prefer the modern key
+        for k in keys:
+            tag, val = _tag(k), str(_get(k, "api_key", "apiKey", "key", default=""))
+            if not val or "secret" in tag or "service" in tag \
+                    or val.startswith("sb_secret_"):
+                continue
+            if want in tag or (want == "publishable"
+                               and val.startswith("sb_publishable_")):
+                key = val
+                break
+        if key:
             break
     if not key:
         raise SystemExit(
             "Could not find the project's publishable key. Copy it from\n"
             f"  https://supabase.com/dashboard/project/{ref}/settings/api\n"
-            "and run:  python ah.py pool-join --url {url} --key <key>"
+            f"and run:  python ah.py pool-join --url {url} --key <key>"
         )
 
     cfg = save_config(ah, {"supabase_url": url, "supabase_key": key,
@@ -259,45 +347,18 @@ def cmd_pool_init(ah, cfg, args):
     p.ping()
     print("    pool answers on the publishable key")
 
-    # --- host the page (optional, nice to have) ---------------------------
-    hosted = None
-    try:
-        for f, ctype in (("terminal.html", "text/html; charset=utf-8"),
-                         ("pool.js", "application/javascript; charset=utf-8")):
-            src = os.path.join(ah.HERE, "web", f)
-            sb(["storage", "cp", src, f"ss:///web/{f}", f"--remote={ref}",
-                "--content-type", ctype, "--cache-control", "max-age=60",
-                "--yes"], quiet=True)
-        hosted = f"{url}/storage/v1/object/public/web/terminal.html"
-        ctype = _head_content_type(hosted)
-        if ctype and "html" not in ctype:
-            print(f"    (hosted copy serves as {ctype}, so browsers would "
-                  "download it rather than show it -- skipping that link)")
-            hosted = None
-    except SystemExit as e:
-        print(f"    (could not upload the page: {str(e)[:120]})")
-        hosted = None
-
+    # Supabase Storage deliberately serves anything HTML-ish as text/plain,
+    # so the terminal cannot be hosted there however the content type is set.
+    # The two ways to open it are the artifact and `ah.py ui`.
     invite = make_invite(url, key, "scans")
     print("\n" + "=" * 60)
     print("Pool is live.")
     print(f"  REST     {url}")
-    if hosted:
-        print(f"  terminal {hosted}")
+    print("  terminal python ah.py ui")
     print("\nSend your friends this one line:\n")
     print(f"  python ah.py pool-join {invite}\n")
     print("Then they run  python ah.py watch  and every scan they make lands")
     print("in the pool. Push your own current scan now with:  python ah.py push")
-
-
-def _head_content_type(url: str) -> str | None:
-    import urllib.request
-    try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return r.headers.get("Content-Type")
-    except Exception:
-        return None
 
 
 # --------------------------------------------------------------------------- #
